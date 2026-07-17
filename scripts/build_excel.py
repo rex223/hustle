@@ -108,6 +108,21 @@ def build():
         print("No data found. Run populate_data.py first.")
         return
 
+    # Add the 3 new columns beside CODE
+    if "CODE" in df.columns:
+        code_idx = df.columns.get_loc("CODE")
+        if "Raabta Code" not in df.columns:
+            df.insert(code_idx + 1, "Raabta Code", "")
+        if "Total No of Students Involved" not in df.columns:
+            df.insert(code_idx + 2, "Total No of Students Involved", "")
+        if "Madaris Involved" not in df.columns:
+            df.insert(code_idx + 3, "Madaris Involved", "")
+            
+    # Sort the dataframe so common Raabta codes are adjacent
+    if "Raabta Code" in df.columns:
+        df = df.sort_values(by=["Raabta Code", "CODE"], na_position='last')
+
+
     headers = list(df.columns)
     n_cols  = len(headers)
 
@@ -130,6 +145,10 @@ def build():
         ws_forms = wb.Sheets(1);  ws_forms.Name = "Forms"
         ws_db    = wb.Sheets.Add(After=ws_forms); ws_db.Name = "Database"
         ws_dash  = wb.Sheets.Add(After=ws_db);   ws_dash.Name = "Dashboard"
+        
+        ws_student_db = wb.Sheets.Add(After=ws_dash); ws_student_db.Name = "Student_DB"
+        ws_teacher_db = wb.Sheets.Add(After=ws_student_db); ws_teacher_db.Name = "Teacher_DB"
+        ws_madaris_db = wb.Sheets.Add(After=ws_teacher_db); ws_madaris_db.Name = "Madaris_DB"
 
         # ════════════════════════════════════════════════════════════════════
         # FORMS SHEET
@@ -138,7 +157,7 @@ def build():
         excel.ActiveWindow.DisplayGridlines = True
 
         # Title banner rows 1-3
-        ws_forms.Range(ws_forms.Cells(1,1), ws_forms.Cells(3, n_cols+3)).Interior.Color = C_EMERALD
+        ws_forms.Range(ws_forms.Cells(1,1), ws_forms.Cells(3, n_cols + 20)).Interior.Color = C_EMERALD
         ws_forms.Cells(2,2).Value = "MADRASA DATA ENTRY PORTAL"
         ws_forms.Cells(2,2).Font.Size  = 22
         ws_forms.Cells(2,2).Font.Bold  = True
@@ -186,6 +205,55 @@ def build():
         ws_forms.Cells(8,2).Font.Italic = True
         ws_forms.Cells(8,2).Font.Color  = rgb(100, 116, 139)
 
+        # ── Add 3 Smart Forms (Student, Teacher, Madaris) ──
+        form_start_col = n_cols + 4
+        
+        # Helper to draw a form section
+        def draw_form(ws, title, start_col, color, fields):
+            ws.Cells(5, start_col).Value = title
+            ws.Range(ws.Cells(5, start_col), ws.Cells(5, start_col + 1)).Merge()
+            ws.Cells(5, start_col).Font.Size = 14
+            ws.Cells(5, start_col).Font.Bold = True
+            ws.Cells(5, start_col).Font.Color = C_WHITE
+            ws.Cells(5, start_col).Interior.Color = color
+            ws.Cells(5, start_col).HorizontalAlignment = -4108 # xlCenter
+            
+            for idx, field in enumerate(fields):
+                r = 7 + idx
+                ws.Cells(r, start_col).Value = field
+                ws.Cells(r, start_col).Font.Bold = True
+                ws.Cells(r, start_col).Interior.Color = rgb(241, 245, 249) # Slate 100
+                ws.Cells(r, start_col).Borders.Weight = 2
+                
+                icell = ws.Cells(r, start_col + 1)
+                icell.Interior.Color = C_WHITE
+                icell.Borders.Weight = 2
+                
+            # Add a basic SmartArt/Chart placeholder below the fields
+            shape_top = ws.Cells(7 + len(fields) + 2, start_col).Top
+            shape_left = ws.Cells(7 + len(fields) + 2, start_col).Left
+            shape = ws.Shapes.AddShape(1, shape_left, shape_top, 150, 80) # 1=msoShapeRectangle
+            shape.TextFrame2.TextRange.Text = f"{title} Data Viz\\n(SmartArt/Chart Placeholder)"
+            shape.TextFrame2.TextRange.Font.Size = 10
+            shape.Fill.ForeColor.RGB = rgb(226, 232, 240) # Slate 200
+            shape.Line.ForeColor.RGB = color
+            shape.Line.Weight = 2
+            
+            # Submit button for this form
+            btn_top = ws.Cells(7 + len(fields) + 2 + 6, start_col).Top
+            btn = ws.Buttons().Add(shape_left, btn_top, 100, 30)
+            btn.Caption = f"Submit {title.split()[0]}"
+            btn.OnAction = f"Submit{title.split()[0]}"
+
+        student_fields = ["Student Name", "Age", "Class / Grade", "Gender", "Notes"]
+        draw_form(ws_forms, "Student Information", form_start_col, rgb(37, 99, 235), student_fields) # Blue
+        
+        teacher_fields = ["Teacher Name", "Qualification", "Subject Taught", "Experience (Yrs)", "Contact"]
+        draw_form(ws_forms, "Teacher Information", form_start_col + 4, rgb(147, 51, 234), teacher_fields) # Purple
+        
+        madaris_fields = ["Facilities", "Infrastructure", "Boarding Details", "Extracurriculars", "Needs"]
+        draw_form(ws_forms, "Madaris Information", form_start_col + 8, rgb(217, 119, 6), madaris_fields) # Amber
+
         ws_forms.Columns.AutoFit()
 
         # ════════════════════════════════════════════════════════════════════
@@ -194,17 +262,18 @@ def build():
         ws_db.Activate()
         excel.ActiveWindow.DisplayGridlines = True
 
-        for i, hdr in enumerate(headers):
-            ws_db.Cells(1, i+1).Value = hdr
+        ws_db.Range(ws_db.Cells(1, 1), ws_db.Cells(1, n_cols)).Value = headers
+        if "PIN" in headers:
+            pin_idx = headers.index("PIN") + 1
+            ws_db.Columns(pin_idx).NumberFormat = "@"
+            
+        if "Entry Date" in headers:
+            date_idx = headers.index("Entry Date") + 1
+            ws_db.Columns(date_idx).NumberFormat = "dd/mm/yyyy"
 
-        for r_idx, row in df.iterrows():
-            for c_idx, val in enumerate(row):
-                cell = ws_db.Cells(r_idx+2, c_idx+1)
-                if headers[c_idx] == "PIN":
-                    cell.NumberFormat = "@"
-                if headers[c_idx] == "Entry Date" and val:
-                    cell.NumberFormat = "dd/mm/yyyy"
-                cell.Value = str(val)
+        if not df.empty:
+            data_body = ws_db.Range(ws_db.Cells(2, 1), ws_db.Cells(len(df) + 1, n_cols))
+            data_body.Value = df.values.tolist()
 
         # Format as named table
         end_cell  = ws_db.Cells(len(df)+1, n_cols)
@@ -212,6 +281,17 @@ def build():
         tbl       = ws_db.ListObjects.Add(1, db_range, 1, 1)
         tbl.Name  = "tblDatabase"
         tbl.TableStyle = "TableStyleDark10"
+
+        # Apply formulas to the new columns
+        if "Total No of Students Involved" in headers:
+            idx = headers.index("Total No of Students Involved") + 1
+            if len(df) > 0:
+                ws_db.Cells(2, idx).Formula = "=SUMIF([Raabta Code], [@[Raabta Code]], [TOTAL S])"
+                
+        if "Madaris Involved" in headers:
+            idx = headers.index("Madaris Involved") + 1
+            if len(df) > 0:
+                ws_db.Cells(2, idx).Formula = "=COUNTIF([Raabta Code], [@[Raabta Code]])"
 
         ws_db.Columns.AutoFit()
 
@@ -267,6 +347,26 @@ def build():
         ws_dash.Cells(10,2).Font.Color = rgb(30,41,59)
 
         ws_dash.Columns.AutoFit()
+        
+        # ════════════════════════════════════════════════════════════════════
+        # FORM DATABASE SHEETS (Student, Teacher, Madaris)
+        # ════════════════════════════════════════════════════════════════════
+        def init_db_sheet(ws, title, fields):
+            ws.Activate()
+            excel.ActiveWindow.DisplayGridlines = True
+            headers = fields + ["Timestamp"]
+            ws.Range(ws.Cells(1, 1), ws.Cells(1, len(headers))).Value = headers
+            # Format as named table
+            tbl_range = ws.Range(ws.Cells(1, 1), ws.Cells(2, len(headers)))
+            tbl = ws.ListObjects.Add(1, tbl_range, 1, 1)
+            tbl.Name = f"tbl{title.split()[0]}"
+            tbl.TableStyle = "TableStyleDark10"
+            ws.Columns.AutoFit()
+            
+        init_db_sheet(ws_student_db, "Student Information", student_fields)
+        init_db_sheet(ws_teacher_db, "Teacher Information", teacher_fields)
+        init_db_sheet(ws_madaris_db, "Madaris Information", madaris_fields)
+
 
         # ════════════════════════════════════════════════════════════════════
         # VBA MACROS
@@ -393,6 +493,49 @@ Sub SearchMadrasa()
         If tbl.AutoFilter.FilterMode Then tbl.AutoFilter.ShowAllData
     End If
 End Sub
+
+Sub SubmitStudent()
+    SubmitSmartForm "Student", {form_start_col}
+End Sub
+
+Sub SubmitTeacher()
+    SubmitSmartForm "Teacher", {form_start_col + 4}
+End Sub
+
+Sub SubmitMadaris()
+    SubmitSmartForm "Madaris", {form_start_col + 8}
+End Sub
+
+Sub SubmitSmartForm(formName As String, startCol As Long)
+    Dim wsForm As Worksheet, wsDb As Worksheet
+    Dim tbl As ListObject
+    Dim newRow As ListRow
+    Dim r As Long: r = 7
+    Dim c As Long
+    
+    Set wsForm = ThisWorkbook.Sheets("Forms")
+    Set wsDb = ThisWorkbook.Sheets(formName & "_DB")
+    Set tbl = wsDb.ListObjects("tbl" & formName)
+    
+    ' Basic check - first field not empty
+    If Trim(wsForm.Cells(r, startCol + 1).Value) = "" Then
+        MsgBox "Please fill out the first field before submitting.", vbExclamation
+        Exit Sub
+    End If
+    
+    Set newRow = tbl.ListRows.Add
+    
+    ' Read 5 fields
+    For c = 1 To 5
+        newRow.Range(c).Value = wsForm.Cells(r + c - 1, startCol + 1).Value
+        wsForm.Cells(r + c - 1, startCol + 1).ClearContents
+    Next c
+    
+    ' Timestamp
+    newRow.Range(6).Value = Now
+    
+    MsgBox formName & " record submitted successfully!", vbInformation, "Success"
+End Sub
 """
         mod = wb.VBProject.VBComponents.Add(1)
         mod.CodeModule.AddFromString(vba)
@@ -415,7 +558,7 @@ End Sub
             FileFormat=52,          # xlOpenXMLWorkbookMacroEnabled
             Password=WB_PASSWORD
         )
-        wb.Close()
+        wb.SaveAs(str(OUTPUT), FileFormat=52)
         print(f"\nWorkbook saved: {OUTPUT}")
         print(f"Password: {WB_PASSWORD}")
 

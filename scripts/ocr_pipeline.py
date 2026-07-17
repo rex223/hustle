@@ -21,7 +21,10 @@ from dotenv import load_dotenv
 
 # ── Config ──────────────────────────────────────────────────────────────────
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_API_KEYS = [v for k, v in os.environ.items() if k.startswith("GEMINI_API_KEY") and v.strip()]
+if not GEMINI_API_KEYS:
+    raise ValueError("No GEMINI_API_KEY found in .env")
+
 IMAGES_DIR = Path(__file__).parent.parent / "images"
 DONE_DIR = IMAGES_DIR / "done"
 CSV_PATH = Path(__file__).parent.parent / "extracted_data.csv"
@@ -32,7 +35,27 @@ ERROR_CSV_PATH = Path(__file__).parent.parent / "error_tracker.csv"
 #   gemini-2.5-pro    — slower, most accurate (use for tricky/blurry images)
 GEMINI_MODEL = "gemini-2.5-flash"
 
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+# Key rotation state
+CURRENT_KEY_IDX = 0
+
+def get_gemini_url() -> str:
+    if not GEMINI_API_KEYS:
+        raise Exception("All API keys have been blacklisted or exhausted.")
+    key = GEMINI_API_KEYS[CURRENT_KEY_IDX]
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}"
+
+def rotate_key():
+    global CURRENT_KEY_IDX
+    if GEMINI_API_KEYS:
+        CURRENT_KEY_IDX = (CURRENT_KEY_IDX + 1) % len(GEMINI_API_KEYS)
+
+def blacklist_key():
+    global CURRENT_KEY_IDX
+    if GEMINI_API_KEYS:
+        bad_key = GEMINI_API_KEYS.pop(CURRENT_KEY_IDX)
+        print(f"    [403 Forbidden] Key ending in {bad_key[-4:]} cannot access {GEMINI_MODEL}. Blacklisting it.")
+        if CURRENT_KEY_IDX >= len(GEMINI_API_KEYS):
+            CURRENT_KEY_IDX = 0
 
 # The canonical column order we always write to
 SCHEMA = [
@@ -122,13 +145,24 @@ def call_gemini(img_path: Path) -> list[dict]:
         "generationConfig": {"temperature": 0, "maxOutputTokens": 8192}
     }
     import time
-    for attempt in range(5):
-        resp = requests.post(GEMINI_URL, json=payload, timeout=60)
-        if resp.status_code == 429:
-            wait = 15 * (attempt + 1)
-            print(f"    [429 Rate Limit hit!] Gemini is rate-limiting us. Sleeping for {wait}s before retrying...")
-            time.sleep(wait)
+    for attempt in range(15): # higher attempt count to allow looping through multiple keys
+        url = get_gemini_url()
+        resp = requests.post(url, json=payload, timeout=60)
+        
+        if resp.status_code == 403:
+            blacklist_key()
             continue
+            
+        if resp.status_code == 429:
+            key_preview = GEMINI_API_KEYS[CURRENT_KEY_IDX][-4:] if GEMINI_API_KEYS else ""
+            print(f"    [429 Rate Limit] Key ending in {key_preview} hit quota.")
+            rotate_key()
+            # If we've looped through all keys, then sleep
+            if attempt >= len(GEMINI_API_KEYS):
+                print(f"    All keys exhausted. Sleeping 15s...")
+                time.sleep(15)
+            continue
+            
         resp.raise_for_status()
         break
     else:
@@ -165,7 +199,11 @@ def map_to_schema(raw_rows: list[dict], img_name: str) -> pd.DataFrame:
 def get_existing_keys() -> set:
     if CSV_PATH.exists():
         existing = pd.read_csv(CSV_PATH, dtype=str).fillna("")
-        return set(zip(existing['NAME OF MADRASAH'].str.strip().str.upper(), existing['PIN'].str.strip()))
+        return set(zip(
+            existing['CODE'].str.strip().str.upper(),
+            existing['NAME OF MADRASAH'].str.strip().str.upper(),
+            existing['PIN'].str.strip()
+        ))
     return set()
 
 
@@ -192,12 +230,12 @@ def validate_and_split(new_df: pd.DataFrame, existing_keys: set) -> tuple[pd.Dat
         if missing:
             errors.append(f"Missing mandatory: {', '.join(missing)}")
             
-        # 2. Duplicate Check (NAME + PIN)
-        key = (name, pin)
+        # 2. Duplicate Check (CODE + NAME + PIN)
+        key = (code, name, pin)
         if name and key in existing_keys:
-            errors.append("Duplicate Madrasah (Name + PIN already in database)")
+            errors.append("Duplicate Madrasah (Code + Name + PIN already in database)")
         elif name and key in seen_in_batch:
-            errors.append("Duplicate Madrasah (Name + PIN within this image scan)")
+            errors.append("Duplicate Madrasah (Code + Name + PIN within this image scan)")
         else:
             if name: seen_in_batch.add(key)
             
@@ -258,16 +296,27 @@ def log_errors(df_err: pd.DataFrame):
 
 
 def main():
-    if not GEMINI_API_KEY:
-        print("ERROR: GEMINI_API_KEY not found in .env file.")
-        return
 
     DONE_DIR.mkdir(parents=True, exist_ok=True)
+
+    import re
+    
+    def get_sort_key(filepath):
+        # Check if the filename (without extension) is strictly a number (e.g. "1", "2")
+        match = re.match(r'^(\d+)$', filepath.stem.strip())
+        if match:
+            # Sort Group 0: By the clear number in the filename
+            return (0, int(match.group(1)), filepath.stat().st_mtime)
+        else:
+            # Sort Group 1: By file modification time (timestamp)
+            return (1, 0, filepath.stat().st_mtime)
 
     image_files = [
         f for f in IMAGES_DIR.iterdir()
         if f.is_file() and f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.webp'}
     ]
+    
+    image_files.sort(key=get_sort_key)
 
     if not image_files:
         print(f"No images found in {IMAGES_DIR}. Drop images there and re-run.")
@@ -281,34 +330,42 @@ def main():
 
     for img in image_files:
         print(f"Processing: {img.name} ...")
-        try:
-            raw_rows = call_gemini(img)
-            df = map_to_schema(raw_rows, img.name)
-            
-            df_valid, df_err = validate_and_split(df, existing_keys)
-            
-            added = merge_valid_rows(df_valid)
-            errors = log_errors(df_err)
-            
-            if added > 0:
-                new_keys = set(zip(df_valid['NAME OF MADRASAH'].str.strip().str.upper(), df_valid['PIN'].str.strip()))
-                existing_keys.update(new_keys)
-
-            print(f"  Gemini extracted {len(raw_rows)} row(s).")
-            print(f"  Added {added} valid row(s).")
-            if errors > 0:
-                print(f"  Rejected {errors} row(s) to error_tracker.csv")
+        while True:
+            try:
+                raw_rows = call_gemini(img)
+                df = map_to_schema(raw_rows, img.name)
                 
-            shutil.move(str(img), DONE_DIR / img.name)
-            print(f"  Moved to images/done/")
-            total_added += added
-            total_errors += errors
-            
-            # Prevent hitting the 15 RPM rate limit (wait 5 seconds between images)
-            import time
-            time.sleep(5)
-        except Exception as e:
-            print(f"  ERROR processing {img.name}: {e}")
+                df_valid, df_err = validate_and_split(df, existing_keys)
+                
+                added = merge_valid_rows(df_valid)
+                errors = log_errors(df_err)
+                
+                if added > 0:
+                    new_keys = set(zip(df_valid['NAME OF MADRASAH'].str.strip().str.upper(), df_valid['PIN'].str.strip()))
+                    existing_keys.update(new_keys)
+
+                print(f"  Gemini extracted {len(raw_rows)} row(s).")
+                print(f"  Added {added} valid row(s).")
+                if errors > 0:
+                    print(f"  Rejected {errors} row(s) to error_tracker.csv")
+                    
+                shutil.move(str(img), DONE_DIR / img.name)
+                print(f"  Moved to images/done/")
+                total_added += added
+                total_errors += errors
+                
+                # Prevent hitting the 15 RPM rate limit (wait 5 seconds between images)
+                import time
+                time.sleep(5)
+                
+                # Break out of the retry loop because parsing was successful!
+                break
+                
+            except Exception as e:
+                print(f"  ERROR processing {img.name}: {e}")
+                print(f"  [Chronological Lock] Refusing to skip. Retrying in 10 seconds...")
+                import time
+                time.sleep(10)
 
     print(f"\nDone. Total valid rows added: {total_added}")
     if total_errors > 0:
