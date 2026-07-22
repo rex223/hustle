@@ -61,7 +61,7 @@ def blacklist_key():
 SCHEMA = [
     'Entry Date', 'CODE', 'NAME OF MADRASAH', 'Raabta Centre',
     'ESTD.', 'VILLAGE', 'Post Office', 'Police Station', 'PIN',
-    'TALEEM C', 'TOTAL S', 'BOARDIN S', 'District',
+    'TALEEM C', 'TOTAL S', 'BOARDIN S', 'DAY SCHOLAR', 'District',
     'Municipality/Block-Panchayat',
     'Nearest Railway Station', 'Train from Sealdah', 'Auto Stand', 'Main Bazaar',
     'Source Image'
