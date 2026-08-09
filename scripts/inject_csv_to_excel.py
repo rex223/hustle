@@ -1,7 +1,7 @@
 """
 inject_csv_to_excel.py
 ---------------------
-Safely appends ONLY NEW rows from extracted_data.csv into forms_v4.xlsm.
+Safely appends ONLY NEW rows from extracted_data.csv into forms_v5.xlsm.
 Uses win32com (Excel itself) to handle the password-protected .xlsm file.
 Duplicate detection: unique key = (NAME OF MADRASAH, PIN).
 Never overwrites or deletes existing rows.
@@ -201,7 +201,7 @@ def main():
         print(f"\nOK SUCCESS! {EXCEL_PATH.name} saved with {len(new_rows)} new rows injected.")
     except Exception as e:
         print(f"\nERROR saving: {e}")
-        print("  Make sure forms_v4.xlsm is NOT open in Excel right now!")
+        print("  Make sure forms_v5.xlsm is NOT open in Excel right now!")
         wb.Close(False)
         excel.Quit()
         sys.exit(1)

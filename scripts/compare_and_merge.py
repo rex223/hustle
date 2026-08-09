@@ -2,7 +2,7 @@
 compare_and_merge.py
 ─────────────────────
 Compares 'previous' sheet (sheets/previous.xlsm or previous.xlsx) 
-against current forms_v4.xlsm and injects ONLY the missing rows.
+against current forms_v5.xlsm and injects ONLY the missing rows.
 Unique key: (NAME OF MADRASAH, PIN)
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 BASE_DIR    = Path(r"D:\CLLG\hustle")
 PREV_PATH   = BASE_DIR / "sheets" / "previous.xlsm"   # Change extension if .xlsx
-CURR_PATH   = BASE_DIR / "sheets" / "forms_v4.xlsm"
+CURR_PATH   = BASE_DIR / "sheets" / "forms_v5.xlsm"
 MIRROR_CSV  = BASE_DIR / "sheets" / "database_mirror.csv"
 WB_PASSWORD = "adinul"
 SHEET_NAME  = "Database"
@@ -58,7 +58,7 @@ def read_sheet_via_com(path, password=None, sheet_name=SHEET_NAME):
 def main():
     # --- Check files ---
     if not CURR_PATH.exists():
-        print(f"ERROR: forms_v4.xlsm not found at {CURR_PATH}")
+        print(f"ERROR: forms_v5.xlsm not found at {CURR_PATH}")
         sys.exit(1)
     
     # Try both .xlsm and .xlsx for previous
@@ -89,7 +89,7 @@ def main():
         sys.exit(1)
     
     # --- Read current Excel ---
-    print(f"\nReading current forms_v4.xlsm...")
+    print(f"\nReading current forms_v5.xlsm...")
     curr_headers, curr_rows = read_sheet_via_com(CURR_PATH, WB_PASSWORD)
     print(f"  Rows in current : {len(curr_rows)}")
     
@@ -119,14 +119,14 @@ def main():
     print(f"  Missing from current: {len(missing_rows)}")
     
     if not missing_rows:
-        print("\nOK: All rows from previous sheet are already in forms_v4.xlsm!")
+        print("\nOK: All rows from previous sheet are already in forms_v5.xlsm!")
         return
     
     print(f"\n  Sample of missing rows:")
     for r in missing_rows[:10]:
         print(f"    {r.get(NAME_COL,'')} | PIN: {r.get(PIN_COL,'')} | District: {r.get('District','')}")
     
-    print(f"\nInjecting {len(missing_rows)} missing rows into forms_v4.xlsm...")
+    print(f"\nInjecting {len(missing_rows)} missing rows into forms_v5.xlsm...")
     
     # --- Open current for writing ---
     pythoncom.CoInitialize()
@@ -159,10 +159,10 @@ def main():
         wb.SaveAs(str(CURR_PATH.resolve()), FileFormat=52, Password=WB_PASSWORD)
         wb.Close(False)
         excel.Quit()
-        print(f"\nSUCCESS! Injected {len(missing_rows)} rows from previous sheet into forms_v4.xlsm")
+        print(f"\nSUCCESS! Injected {len(missing_rows)} rows from previous sheet into forms_v5.xlsm")
     except Exception as e:
         print(f"ERROR saving: {e}")
-        print("  Make sure forms_v4.xlsm is NOT open in Excel!")
+        print("  Make sure forms_v5.xlsm is NOT open in Excel!")
         wb.Close(False)
         excel.Quit()
         sys.exit(1)

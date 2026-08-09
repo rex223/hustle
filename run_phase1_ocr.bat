@@ -14,7 +14,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [2/2] Injecting new rows into forms_v4.xlsm (CLOSE IT IN EXCEL FIRST!)...
+echo [2/2] Injecting new rows into forms_v5.xlsm (CLOSE IT IN EXCEL FIRST!)...
 python scripts\inject_csv_to_excel.py
 
 echo.
