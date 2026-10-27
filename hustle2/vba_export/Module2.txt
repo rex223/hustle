@@ -1,0 +1,189 @@
+Public Sub LoadRentData()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("todays_rent_data")
+    
+    Dim newMonth As String
+    newMonth = InputBox("Enter the month to load (e.g., JULY_2026):", "Load Month")
+    If newMonth = "" Then Exit Sub
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    ' Update the Month Marker in O2
+    ws.Range("O2").Value = UCase(Trim(newMonth))
+    
+    ' Call the master macro to pull all payments from the individual sheets!
+    ThisWorkbook.UpdateGroupSummary
+    
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    
+    MsgBox "Dashboard successfully updated for " & UCase(Trim(newMonth)) & "!", vbInformation, "Loaded"
+End Sub
+
+Public Sub AutoPaySalaries()
+    Dim wsExp As Worksheet
+    
+    On Error Resume Next
+    Set wsExp = ThisWorkbook.Sheets("todays_expenditure")
+    On Error GoTo 0
+    
+    If wsExp Is Nothing Then
+        MsgBox "Could not find 'todays_expenditure' sheet!", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 1. Identify the Month from A2 in todays_expenditure
+    Dim targetMonthStr As String
+    targetMonthStr = UCase(Trim(wsExp.Range("A2").Value))
+    
+    If targetMonthStr = "" Then
+        MsgBox "Please enter the month (e.g., JULY_2026) in cell A2 of todays_expenditure.", vbExclamation
+        Exit Sub
+    End If
+    
+    ' Parse Month using the same robust logic as the dashboard!
+    Dim targetMonth As Integer, targetYear As Integer
+    If InStr(targetMonthStr, "_") > 0 Or InStr(targetMonthStr, " ") > 0 Then
+        Dim parts() As String
+        If InStr(targetMonthStr, "_") > 0 Then
+            parts = Split(targetMonthStr, "_")
+        Else
+            parts = Split(targetMonthStr, " ")
+        End If
+        On Error Resume Next
+        targetMonth = Month(DateValue("1 " & parts(0) & " 2000"))
+        targetYear = CInt(parts(1))
+        On Error GoTo 0
+    ElseIf targetMonthStr <> "" Then
+        On Error Resume Next
+        targetMonth = Month(DateValue("1 " & targetMonthStr & " 2000"))
+        targetYear = Year(Now)
+        On Error GoTo 0
+    End If
+    
+    If targetMonth = 0 Or targetYear = 0 Then
+        MsgBox "Could not understand the month in A2. Please use a format like 'JULY_2026' or 'JULY'.", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 2. Calculate TOTAL Rent Paid for this month across all individual Name sheets
+    Dim totalRentCollected As Double
+    totalRentCollected = 0
+    
+    Dim ignoreSheets As String
+    ignoreSheets = "|RENT DATA|TODAYS_RENT_DATA|DATABASE_RENT_DATA|PAYMENT SHEET|EXPENDITURE|PURCHASE|DATABASE_PURCHASE|PURCHASE SHEET|SHEET17|TODAYS_EXPENDITURE|DATABASE_EXPENDITURE|"
+    
+    Dim ws As Worksheet
+    Dim r As Long, lastAliasRow As Long
+    Dim pDate As Variant, forMonthStr As String, monthChecked As Boolean, addPayment As Boolean, amt As Double
+    
+    For Each ws In ThisWorkbook.Sheets
+        If InStr(1, ignoreSheets, "|" & UCase(ws.Name) & "|") = 0 Then
+            lastAliasRow = ws.Cells(ws.Rows.Count, "D").End(xlUp).Row
+            If lastAliasRow >= 2 Then
+                For r = 2 To lastAliasRow
+                    pDate = ws.Cells(r, 1).Value
+                    addPayment = False
+                    monthChecked = False
+                    
+                    ' Check Column C first!
+                    If Not IsError(ws.Cells(r, 3).Value) Then
+                        forMonthStr = UCase(Trim(CStr(ws.Cells(r, 3).Value)))
+                        If forMonthStr <> "" Then
+                            monthChecked = True
+                            If InStr(forMonthStr, UCase(MonthName(targetMonth))) > 0 Then
+                                addPayment = True
+                            End If
+                        End If
+                    End If
+                    
+                    ' Fallback to checking Column A
+                    If Not monthChecked Then
+                        If IsDate(pDate) Then
+                            If Month(pDate) = targetMonth And Year(pDate) = targetYear Then
+                                addPayment = True
+                            End If
+                        End If
+                    End If
+                    
+                    If addPayment Then
+                        amt = 0
+                        If IsNumeric(ws.Cells(r, 6).Value) Then amt = CDbl(ws.Cells(r, 6).Value)
+                        totalRentCollected = totalRentCollected + amt
+                    End If
+                Next r
+            End If
+        End If
+    Next ws
+    
+    ' 3. Calculate Already Paid Salaries for this month
+    Dim lastExpRow As Long
+    lastExpRow = wsExp.Cells(wsExp.Rows.Count, "B").End(xlUp).Row
+    
+    Dim totalSalariesPaid As Double
+    totalSalariesPaid = 0
+    
+    For r = 3 To lastExpRow
+        If UCase(Trim(wsExp.Cells(r, 5).Value)) = "PAID" Then
+            amt = 0
+            If IsNumeric(wsExp.Cells(r, 2).Value) Then amt = CDbl(wsExp.Cells(r, 2).Value)
+            totalSalariesPaid = totalSalariesPaid + amt
+        End If
+    Next r
+    
+    ' 4. Calculate Available Balance
+    Dim availableBalance As Double
+    availableBalance = totalRentCollected - totalSalariesPaid
+    
+    If availableBalance <= 0 Then
+        MsgBox "No rent funds available for " & UCase(MonthName(targetMonth)) & "!" & vbCrLf & vbCrLf & _
+               "Total Collected: " & totalRentCollected & vbCrLf & _
+               "Already Paid Out: " & totalSalariesPaid, vbInformation, "No Funds Available"
+        Exit Sub
+    End If
+    
+    ' 5. Pay Unpaid Salaries Down the List
+    Dim newlyPaidCount As Long
+    newlyPaidCount = 0
+    Dim newlyPaidAmount As Double
+    newlyPaidAmount = 0
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    For r = 3 To lastExpRow
+        ' If not paid yet
+        If UCase(Trim(wsExp.Cells(r, 5).Value)) <> "PAID" Then
+            Dim salAmt As Double
+            salAmt = 0
+            If IsNumeric(wsExp.Cells(r, 2).Value) Then salAmt = CDbl(wsExp.Cells(r, 2).Value)
+            
+            ' Only attempt to pay if there is a salary number
+            If salAmt > 0 Then
+                If availableBalance >= salAmt Then
+                    ' Pay them!
+                    wsExp.Cells(r, 5).Value = "PAID"
+                    wsExp.Cells(r, 4).Value = Date ' Stamp today's date in Column D
+                    
+                    availableBalance = availableBalance - salAmt
+                    newlyPaidAmount = newlyPaidAmount + salAmt
+                    newlyPaidCount = newlyPaidCount + 1
+                Else
+                    ' Out of funds! Stop paying.
+                    Exit For
+                End If
+            End If
+        End If
+    Next r
+    
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    
+    ' 6. Give the user a beautiful summary
+    MsgBox "Autopay Complete for " & UCase(MonthName(targetMonth)) & "!" & vbCrLf & vbCrLf & _
+           "Total Rent Collected: " & totalRentCollected & vbCrLf & _
+           "Salaries Paid This Run: " & newlyPaidCount & " (Totaling " & newlyPaidAmount & ")" & vbCrLf & _
+           "Rent Funds Remaining: " & availableBalance, vbInformation, "Autopay Success"
+
+End Sub

@@ -1,0 +1,22 @@
+Public Sub LoadRentData()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("todays_rent_data")
+    
+    Dim newMonth As String
+    newMonth = InputBox("Enter the month to load (e.g., JULY_2026):", "Load Month")
+    If newMonth = "" Then Exit Sub
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    ' Update the Month Marker in O2
+    ws.Range("O2").Value = UCase(Trim(newMonth))
+    
+    ' Call the master macro to pull all payments from the individual sheets!
+    ThisWorkbook.UpdateGroupSummary
+    
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    
+    MsgBox "Dashboard successfully updated for " & UCase(Trim(newMonth)) & "!", vbInformation, "Loaded"
+End Sub

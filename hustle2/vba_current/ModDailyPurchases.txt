@@ -1,0 +1,351 @@
+Public Sub SaveDailyPurchases()
+    Dim wsEntry As Worksheet
+    Dim wsDB As Worksheet
+    Dim tblEntry As ListObject
+    Dim dateCell As Range
+    
+    On Error Resume Next
+    Set wsEntry = ThisWorkbook.Sheets("PURCHASE SHEET")
+    Set wsDB = ThisWorkbook.Sheets("DATABASE_PURCHASE")
+    Set tblEntry = wsEntry.ListObjects("EntryFormTable")
+    Set dateCell = wsEntry.Range("C1")
+    On Error GoTo 0
+    
+    If wsEntry Is Nothing Or wsDB Is Nothing Then Exit Sub
+    If Not IsDate(dateCell.Value) Then
+        MsgBox "Please select a valid date in cell C1!", vbExclamation, "Invalid Date"
+        Exit Sub
+    End If
+    
+    Dim saveDate As Date
+    saveDate = CDate(dateCell.Value)
+    
+    Dim targetMonth As String
+    targetMonth = UCase(Format(saveDate, "mmmm_yyyy"))
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    ' -------------------------------------------------------------
+    ' 1. LOCATE OR CREATE THE TARGET MONTH BLOCK IN DATABASE_PURCHASE
+    ' -------------------------------------------------------------
+    Dim lastRow As Long
+    lastRow = wsDB.Cells(wsDB.Rows.Count, "A").End(xlUp).Row
+    If lastRow < 2 Then lastRow = 2
+    
+    Dim mHeaderRow As Long, mTotalRow As Long
+    mHeaderRow = 0
+    mTotalRow = 0
+    
+    Dim r As Long
+    For r = 1 To lastRow
+        If UCase(Trim(CStr(wsDB.Cells(r, 1).Value))) = targetMonth Then
+            mHeaderRow = r
+            Exit For
+        End If
+    Next r
+    
+    ' If month block doesn't exist, create it at the bottom
+    If mHeaderRow = 0 Then
+        Dim insertStart As Long
+        insertStart = wsDB.Cells(wsDB.Rows.Count, "A").End(xlUp).Row
+        If insertStart < 2 Then
+            insertStart = 2
+        Else
+            insertStart = insertStart + 3 ' Leave blank lines before new month
+        End If
+        
+        mHeaderRow = insertStart
+        
+        ' Month Header
+        wsDB.Cells(mHeaderRow, 1).Value = targetMonth
+        With wsDB.Range(wsDB.Cells(mHeaderRow, 1), wsDB.Cells(mHeaderRow, 9))
+            .Interior.Color = RGB(30, 58, 138) ' Deep Navy
+            .Font.Color = vbWhite
+            .Font.Bold = True
+            .Font.Size = 11.5
+            .Font.Name = "Segoe UI"
+        End With
+        
+        ' Column Headers
+        Dim colHeaders As Variant
+        colHeaders = Array("DATE", "GROUP / FOR", "ITEM NAME", "QTY (KG)", "QTY (PCS)", "RATE", "TRSP", "TOTAL AMOUNT", "PAID")
+        Dim cIdx As Long
+        For cIdx = 0 To 8
+            wsDB.Cells(mHeaderRow + 1, cIdx + 1).Value = colHeaders(cIdx)
+        Next cIdx
+        
+        With wsDB.Range(wsDB.Cells(mHeaderRow + 1, 1), wsDB.Cells(mHeaderRow + 1, 9))
+            .Interior.Color = RGB(55, 65, 81) ' Dark Slate
+            .Font.Color = vbWhite
+            .Font.Bold = True
+            .Font.Size = 10
+            .Font.Name = "Segoe UI"
+            .HorizontalAlignment = xlCenter
+        End With
+        
+        ' Month Total row initially at mHeaderRow + 2
+        mTotalRow = mHeaderRow + 2
+        wsDB.Cells(mTotalRow, 1).Value = "TOTAL"
+        wsDB.Cells(mTotalRow, 8).Value = 0
+        wsDB.Cells(mTotalRow, 8).NumberFormat = "#,##0.00"
+        
+        With wsDB.Range(wsDB.Cells(mTotalRow, 1), wsDB.Cells(mTotalRow, 9))
+            .Font.Bold = True
+            .Font.Name = "Segoe UI"
+            .Interior.Color = RGB(243, 244, 246)
+            .Borders(xlEdgeTop).LineStyle = xlContinuous
+            .Borders(xlEdgeBottom).LineStyle = xlDouble
+        End With
+    Else
+        ' Find the TOTAL row for this month
+        For r = mHeaderRow + 2 To wsDB.Rows.Count
+            If UCase(Trim(CStr(wsDB.Cells(r, 1).Value))) = "TOTAL" Then
+                mTotalRow = r
+                Exit For
+            End If
+            ' Safety break if next month reached
+            If UCase(Trim(CStr(wsDB.Cells(r, 1).Value))) Like "*_20##" Then
+                Exit For
+            End If
+        Next r
+        
+        If mTotalRow = 0 Then
+            mTotalRow = wsDB.Cells(wsDB.Rows.Count, "A").End(xlUp).Row + 1
+            wsDB.Cells(mTotalRow, 1).Value = "TOTAL"
+        End If
+    End If
+    
+    ' -------------------------------------------------------------
+    ' 2. SAVE / UPDATE ITEMS FOR THIS DATE IN THIS MONTH BLOCK
+    ' -------------------------------------------------------------
+    Dim i As Long, k As Long
+    Dim dataStartRow As Long
+    dataStartRow = mHeaderRow + 2
+    
+    For i = 1 To tblEntry.DataBodyRange.Rows.Count
+        Dim qtyKg As String, qtyPcs As String, rate As String, trsp As String, total As String, paid As String
+        qtyKg = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 3).Value & ""))
+        qtyPcs = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 4).Value & ""))
+        rate = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 5).Value & ""))
+        trsp = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 6).Value & ""))
+        total = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 7).Value & ""))
+        paid = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 8).Value & ""))
+        
+        Dim entryGroupName As String, entryItemName As String
+        entryGroupName = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 1).Value & ""))
+        entryItemName = Trim(CStr(tblEntry.DataBodyRange.Cells(i, 2).Value & ""))
+        
+        Dim hasData As Boolean
+        hasData = False
+        If qtyKg <> "" Or qtyPcs <> "" Or rate <> "" Or trsp <> "" Or total <> "" Or paid <> "" Then
+            If Val(qtyKg) > 0 Or Val(qtyPcs) > 0 Or Val(rate) > 0 Or Val(trsp) > 0 Or Val(total) > 0 Or paid <> "" Then
+                hasData = True
+            End If
+        End If
+        
+        If hasData Then
+            Dim foundRow As Long
+            foundRow = 0
+            
+            ' Look for this item and date within this month's block
+            If mTotalRow > dataStartRow Then
+                For k = dataStartRow To mTotalRow - 1
+                    If IsDate(wsDB.Cells(k, 1).Value) Then
+                        If CDate(wsDB.Cells(k, 1).Value) = saveDate Then
+                            If UCase(Trim(CStr(wsDB.Cells(k, 3).Value))) = UCase(entryItemName) Then
+                                foundRow = k
+                                Exit For
+                            End If
+                        End If
+                    End If
+                Next k
+            End If
+            
+            If foundRow > 0 Then
+                ' UPDATE EXISTING ROW IN PLACE
+                wsDB.Cells(foundRow, 4).Value = tblEntry.DataBodyRange.Cells(i, 3).Value
+                wsDB.Cells(foundRow, 5).Value = tblEntry.DataBodyRange.Cells(i, 4).Value
+                wsDB.Cells(foundRow, 6).Value = tblEntry.DataBodyRange.Cells(i, 5).Value
+                wsDB.Cells(foundRow, 7).Value = tblEntry.DataBodyRange.Cells(i, 6).Value
+                wsDB.Cells(foundRow, 8).Value = tblEntry.DataBodyRange.Cells(i, 7).Value
+                wsDB.Cells(foundRow, 9).Value = tblEntry.DataBodyRange.Cells(i, 8).Value
+            Else
+                ' INSERT NEW ROW BEFORE mTotalRow
+                wsDB.Rows(mTotalRow).Insert Shift:=xlDown
+                wsDB.Cells(mTotalRow, 1).Value = saveDate
+                wsDB.Cells(mTotalRow, 1).NumberFormat = "d mmm yyyy"
+                wsDB.Cells(mTotalRow, 2).Value = entryGroupName
+                wsDB.Cells(mTotalRow, 3).Value = entryItemName
+                wsDB.Cells(mTotalRow, 4).Value = tblEntry.DataBodyRange.Cells(i, 3).Value
+                wsDB.Cells(mTotalRow, 5).Value = tblEntry.DataBodyRange.Cells(i, 4).Value
+                wsDB.Cells(mTotalRow, 6).Value = tblEntry.DataBodyRange.Cells(i, 5).Value
+                wsDB.Cells(mTotalRow, 7).Value = tblEntry.DataBodyRange.Cells(i, 6).Value
+                wsDB.Cells(mTotalRow, 8).Value = tblEntry.DataBodyRange.Cells(i, 7).Value
+                wsDB.Cells(mTotalRow, 9).Value = tblEntry.DataBodyRange.Cells(i, 8).Value
+                
+                Dim colNum As Long
+                For colNum = 4 To 8
+                    wsDB.Cells(mTotalRow, colNum).NumberFormat = "#,##0.00"
+                Next colNum
+                
+                With wsDB.Range(wsDB.Cells(mTotalRow, 1), wsDB.Cells(mTotalRow, 9))
+                    .Font.Name = "Segoe UI"
+                    .Font.Size = 9.5
+                    .Font.Bold = False
+                    .Interior.ColorIndex = xlNone
+                    .Borders(xlEdgeLeft).LineStyle = xlContinuous
+                    .Borders(xlEdgeLeft).Color = RGB(208, 215, 222)
+                    .Borders(xlEdgeRight).LineStyle = xlContinuous
+                    .Borders(xlEdgeRight).Color = RGB(208, 215, 222)
+                    .Borders(xlEdgeTop).LineStyle = xlContinuous
+                    .Borders(xlEdgeTop).Color = RGB(208, 215, 222)
+                    .Borders(xlEdgeBottom).LineStyle = xlContinuous
+                    .Borders(xlEdgeBottom).Color = RGB(208, 215, 222)
+                    .Borders(xlInsideVertical).LineStyle = xlContinuous
+                    .Borders(xlInsideVertical).Color = RGB(208, 215, 222)
+                End With
+                
+                mTotalRow = mTotalRow + 1
+            End If
+        End If
+    Next i
+    
+    ' -------------------------------------------------------------
+    ' 3. UPDATE MONTH TOTAL FORMULA & DIVIDERS
+    ' -------------------------------------------------------------
+    If mTotalRow > dataStartRow Then
+        wsDB.Cells(mTotalRow, 8).Formula = "=SUM(H" & dataStartRow & ":H" & (mTotalRow - 1) & ")"
+        wsDB.Cells(mTotalRow, 8).NumberFormat = "#,##0.00"
+        
+        ' Apply date divider borders
+        Dim dRow As Long
+        For dRow = dataStartRow To mTotalRow - 2
+            If wsDB.Cells(dRow, 1).Value <> wsDB.Cells(dRow + 1, 1).Value Then
+                With wsDB.Range(wsDB.Cells(dRow, 1), wsDB.Cells(dRow, 9)).Borders(xlEdgeBottom)
+                    .LineStyle = xlContinuous
+                    .Weight = xlMedium
+                    .Color = vbBlack
+                End With
+            End If
+        Next dRow
+    Else
+        wsDB.Cells(mTotalRow, 8).Value = 0
+    End If
+    
+    ' -------------------------------------------------------------
+    ' 4. UPDATE DYNAMIC SIDE SUMMARY TABLE (COLUMNS J:K)
+    ' -------------------------------------------------------------
+    UpdatePurchaseSideTable wsDB
+    
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    
+    MsgBox "Daily purchases for " & Format(saveDate, "d-mmm-yyyy") & " successfully saved to " & Replace(targetMonth, "_", " ") & "!" & vbCrLf & _
+           "Side summary table updated.", vbInformation, "Purchase Saved"
+End Sub
+
+Public Sub UpdatePurchaseSideTable(ByVal wsDB As Worksheet)
+    Dim lastR As Long
+    lastR = wsDB.Cells(wsDB.Rows.Count, "A").End(xlUp).Row
+    If lastR < 2 Then Exit Sub
+    
+    ' Clear existing side table area
+    wsDB.Range("J2:K100").Clear
+    
+    ' Side Table Header
+    wsDB.Cells(2, 10).Value = "MONTH"
+    wsDB.Cells(2, 11).Value = "TOTAL AMOUNT"
+    With wsDB.Range("J2:K2")
+        .Interior.Color = RGB(30, 58, 138) ' Deep Navy
+        .Font.Color = vbWhite
+        .Font.Bold = True
+        .Font.Size = 10.5
+        .Font.Name = "Segoe UI"
+        .HorizontalAlignment = xlCenter
+        .Borders(xlEdgeLeft).LineStyle = xlContinuous
+        .Borders(xlEdgeRight).LineStyle = xlContinuous
+        .Borders(xlEdgeTop).LineStyle = xlContinuous
+        .Borders(xlEdgeBottom).LineStyle = xlContinuous
+    End With
+    
+    Dim sRow As Long
+    sRow = 3
+    
+    Dim r As Long
+    For r = 1 To lastR
+        Dim cellVal As String
+        cellVal = UCase(Trim(CStr(wsDB.Cells(r, 1).Value)))
+        
+        If cellVal Like "*_20##" Then
+            ' Find its TOTAL row
+            Dim totRow As Long
+            totRow = 0
+            Dim searchR As Long
+            For searchR = r + 1 To lastR + 5
+                If UCase(Trim(CStr(wsDB.Cells(searchR, 1).Value))) = "TOTAL" Then
+                    totRow = searchR
+                    Exit For
+                End If
+                If UCase(Trim(CStr(wsDB.Cells(searchR, 1).Value))) Like "*_20##" Then Exit For
+            Next searchR
+            
+            If totRow > 0 Then
+                ' Format month display name
+                Dim parts() As String
+                parts = Split(cellVal, "_")
+                Dim mDisp As String
+                If UBound(parts) >= 1 Then
+                    mDisp = StrConv(parts(0), vbProperCase) & " " & parts(1)
+                Else
+                    mDisp = cellVal
+                End If
+                
+                wsDB.Cells(sRow, 10).NumberFormat = "@"
+                wsDB.Cells(sRow, 10).Value = mDisp
+                wsDB.Cells(sRow, 11).Formula = "=$H$" & totRow
+                wsDB.Cells(sRow, 11).NumberFormat = "#,##0.00"
+                
+                With wsDB.Range(wsDB.Cells(sRow, 10), wsDB.Cells(sRow, 11))
+                    .Font.Name = "Segoe UI"
+                    .Font.Size = 10
+                    .Borders(xlEdgeLeft).LineStyle = xlContinuous
+                    .Borders(xlEdgeLeft).Color = RGB(208, 215, 222)
+                    .Borders(xlEdgeRight).LineStyle = xlContinuous
+                    .Borders(xlEdgeRight).Color = RGB(208, 215, 222)
+                    .Borders(xlEdgeTop).LineStyle = xlContinuous
+                    .Borders(xlEdgeTop).Color = RGB(208, 215, 222)
+                    .Borders(xlEdgeBottom).LineStyle = xlContinuous
+                    .Borders(xlEdgeBottom).Color = RGB(208, 215, 222)
+                    .Borders(xlInsideVertical).LineStyle = xlContinuous
+                    .Borders(xlInsideVertical).Color = RGB(208, 215, 222)
+                End With
+                
+                sRow = sRow + 1
+            End If
+        End If
+    Next r
+    
+    ' Grand Total Row
+    If sRow > 3 Then
+        wsDB.Cells(sRow, 10).Value = "Grand Total"
+        wsDB.Cells(sRow, 11).Formula = "=SUM(K3:K" & (sRow - 1) & ")"
+        wsDB.Cells(sRow, 11).NumberFormat = "#,##0.00"
+        
+        With wsDB.Range(wsDB.Cells(sRow, 10), wsDB.Cells(sRow, 11))
+            .Font.Bold = True
+            .Font.Name = "Segoe UI"
+            .Font.Size = 10.5
+            .Interior.Color = RGB(229, 231, 235)
+            .Borders(xlEdgeTop).LineStyle = xlContinuous
+            .Borders(xlEdgeBottom).LineStyle = xlDouble
+            .Borders(xlEdgeLeft).LineStyle = xlContinuous
+            .Borders(xlEdgeLeft).Color = RGB(208, 215, 222)
+            .Borders(xlEdgeRight).LineStyle = xlContinuous
+            .Borders(xlEdgeRight).Color = RGB(208, 215, 222)
+        End With
+    End If
+    
+    wsDB.Columns("J").ColumnWidth = 18
+    wsDB.Columns("K").ColumnWidth = 20
+End Sub

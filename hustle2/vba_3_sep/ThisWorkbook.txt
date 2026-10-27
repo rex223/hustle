@@ -1,0 +1,741 @@
+Private Sub Workbook_SheetChange(ByVal Sh As Object, ByVal Target As Range)
+    On Error GoTo ErrorHandler
+    
+    ' =========================================================================
+    ' SECTION 1: LOGIC FOR "todays_rent_data" SHEET
+    ' =========================================================================
+    If UCase(Sh.Name) = "TODAYS_RENT_DATA" Then
+        ' Trigger only if you edit columns A to G
+        If Not Intersect(Target, Sh.Range("A2:G1000")) Is Nothing Then
+            Application.EnableEvents = False
+            Application.ScreenUpdating = False
+            
+            ' --- PART 1: AUTO-CREATE & UPDATE NAME SHEETS ---
+            Dim cell As Range
+            If Not Intersect(Target, Sh.Range("A2:A1000")) Is Nothing Then
+                For Each cell In Intersect(Target, Sh.Range("A2:A1000"))
+                    If Trim(cell.Value) <> "" Then
+                        Dim baseName As String
+                        baseName = Trim(cell.Value)
+                        
+                        ' Strip trailing numbers and spaces
+                        Dim prevLen As Long
+                        Do
+                            prevLen = Len(baseName)
+                            If Right(baseName, 1) Like "#" Then baseName = Left(baseName, Len(baseName) - 1)
+                            baseName = Trim(baseName)
+                        Loop Until Len(baseName) = prevLen Or Len(baseName) = 0
+                        
+                        If baseName <> "" And UCase(baseName) <> "GRAND TOTAL" And UCase(Left(baseName, 5)) <> "TOTAL" Then
+                            Dim ws As Worksheet
+                            Dim wsExists As Boolean
+                            wsExists = False
+                            
+                            For Each ws In ThisWorkbook.Sheets
+                                If UCase(ws.Name) = UCase(baseName) Then
+                                    wsExists = True
+                                    Exit For
+                                End If
+                            Next ws
+                            
+                            ' If sheet doesn't exist, create it!
+                            If Not wsExists Then
+                                Set ws = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+                                ws.Name = UCase(baseName)
+                                
+                                ' Build the header
+                                ws.Range("A1:H1").Value = Array("DATE", "TIME", "FOR THE MONTH", "NAME", "AMOUNT", "PAID AMOUNT", "GROUP", "DUE")
+                                ws.Range("A1:H1").Font.Bold = True
+                                
+                                ' Adjust widths
+                                ws.Columns("A").ColumnWidth = 15
+                                ws.Columns("B").ColumnWidth = 12
+                                ws.Columns("C").ColumnWidth = 20
+                                ws.Columns("D:H").ColumnWidth = 15
+                            End If
+                            
+                            Set ws = ThisWorkbook.Sheets(UCase(baseName))
+                            
+                            ' NO MORE LIVE FORMULAS HERE (For Manual Database Entry)
+                            ws.Range("D2").Value = UCase(baseName)
+                        End If
+                    End If
+                Next cell
+            End If
+            
+            ' --- PART 2: AUTO-SORT AND CLEAN SUBTOTALS ---
+            Sh.Activate
+            
+            Sh.Range("A2:G1000").Interior.ColorIndex = xlNone
+            Sh.Range("A2:G1000").Font.Bold = False
+            
+            On Error Resume Next
+            Sh.Range("A1").CurrentRegion.RemoveSubtotal
+            On Error GoTo ErrorHandler
+            
+            Dim i As Long, lastDataRow As Long
+            lastDataRow = Sh.Cells(Sh.Rows.Count, "C").End(xlUp).Row
+            If lastDataRow >= 2 Then
+                For i = lastDataRow To 2 Step -1
+                    If Left(UCase(Trim(Sh.Cells(i, 1).Value)), 5) = "TOTAL" Or UCase(Trim(Sh.Cells(i, 5).Value)) = "GRAND TOTAL" Then
+                        Sh.Rows(i).Delete
+                    End If
+                Next i
+            End If
+            
+            lastDataRow = Sh.Cells(Sh.Rows.Count, "A").End(xlUp).Row
+            If lastDataRow > 1 Then
+                With Sh.Sort
+                    .SortFields.Clear
+                    .SortFields.Add key:=Sh.Range("E2:E" & lastDataRow), SortOn:=xlSortOnValues, Order:=xlAscending, DataOption:=xlSortNormal
+                    .SetRange Sh.Range("A1:G" & lastDataRow)
+                    .header = xlYes
+                    .Apply
+                End With
+                
+                Sh.Range("A1:G" & lastDataRow).Subtotal GroupBy:=5, Function:=xlSum, TotalList:=Array(3), Replace:=True, PageBreaks:=False, SummaryBelowData:=True
+                    
+                ActiveWindow.DisplayOutline = False
+                
+                Dim finalRow As Long
+                finalRow = Sh.Cells(Sh.Rows.Count, "C").End(xlUp).Row
+                For i = 2 To finalRow
+                    If Right(Trim(Sh.Cells(i, 5).Value), 5) = "Total" Then
+                        Sh.Range(Sh.Cells(i, 1), Sh.Cells(i, 7)).Interior.Color = RGB(237, 237, 237)
+                        Sh.Range(Sh.Cells(i, 1), Sh.Cells(i, 7)).Font.Bold = True
+                    End If
+                Next i
+            End If
+            
+            If Not Sh.AutoFilterMode Then
+                Sh.Range("A1:M1").AutoFilter
+            End If
+            
+            UpdateGroupSummary
+            
+            Application.ScreenUpdating = True
+            Application.EnableEvents = True
+        End If
+
+    ' =========================================================================
+    ' SECTION 2: LOGIC FOR TODAYS EXPENDITURE
+    ' =========================================================================
+    ElseIf UCase(Sh.Name) = "TODAYS_EXPENDITURE" Then
+        Application.EnableEvents = False
+        UpdateExpenditureSummary
+        Application.EnableEvents = True
+
+    ' =========================================================================
+    ' SECTION 3: LOGIC FOR INDIVIDUAL NAME SHEETS (The Smart Auto-Fill)
+    ' =========================================================================
+    Else
+        Dim ignoreSheets As String
+        ignoreSheets = "|RENT DATA|TODAYS_RENT_DATA|DATABASE_RENT_DATA|PAYMENT SHEET|EXPENDITURE|PURCHASE|DATABASE_PURCHASE|PURCHASE SHEET|SHEET17|TODAYS_EXPENDITURE|DATABASE_EXPENDITURE|"
+        
+        If InStr(1, ignoreSheets, "|" & UCase(Sh.Name) & "|") > 0 Then Exit Sub
+        
+        ' NEW: Auto-inject DUE formula if it's missing on any row that is edited!
+        If Target.Row >= 2 And Target.Cells.Count = 1 Then
+            If Sh.Cells(Target.Row, 8).HasFormula = False Then
+                Application.EnableEvents = False
+                Sh.Cells(Target.Row, 8).Formula = "=E" & Target.Row & "-F" & Target.Row
+                Application.EnableEvents = True
+            End If
+        End If
+        
+        ' Only proceed if a single cell was changed
+        If Target.Cells.Count > 1 Then Exit Sub
+        
+        Dim lastAliasRow As Long
+        lastAliasRow = Sh.Cells(Sh.Rows.Count, "D").End(xlUp).Row
+        
+        If Target.Row = lastAliasRow And Target.Value <> "" Then
+            Dim nextRow As Long
+            nextRow = lastAliasRow + 1
+            
+            If Sh.Cells(nextRow, 4).Value = "" Then
+                Application.EnableEvents = False
+                
+                If IsDate(Sh.Cells(lastAliasRow, 1).Value) Then
+                    Sh.Cells(nextRow, 1).Value = DateAdd("m", 1, Sh.Cells(lastAliasRow, 1).Value)
+                End If
+                
+                ' Auto-fill "FOR THE MONTH" (Column C)
+                Dim prevMonthStr As String
+                prevMonthStr = Trim(CStr(Sh.Cells(lastAliasRow, 3).Value))
+                If prevMonthStr <> "" Then
+                    On Error Resume Next
+                    Dim parsedPrevDate As Date
+                    parsedPrevDate = DateValue("1 " & prevMonthStr & " 2000")
+                    If Err.Number = 0 Then
+                        Sh.Cells(nextRow, 3).Value = UCase(MonthName(Month(DateAdd("m", 1, parsedPrevDate))))
+                    End If
+                    On Error GoTo ErrorHandler
+                End If
+                
+                ' Auto-fill NAME, AMOUNT, and GROUP as raw values
+                Sh.Cells(nextRow, 4).Value = Sh.Cells(lastAliasRow, 4).Value
+                Sh.Cells(nextRow, 5).Value = Sh.Cells(lastAliasRow, 5).Value
+                Sh.Cells(nextRow, 7).Value = Sh.Cells(lastAliasRow, 7).Value
+                
+                ' Update the Group Summary since a new payment row might have been generated
+                UpdateGroupSummary
+                UpdateExpenditureSummary
+                
+                Application.EnableEvents = True
+            End If
+        Else
+            ' Even if it's not the last row, update the summary in case they modified an old payment
+            Application.EnableEvents = False
+            UpdateGroupSummary
+            UpdateExpenditureSummary
+            Application.EnableEvents = True
+        End If
+    End If
+    Exit Sub
+    
+ErrorHandler:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+End Sub
+
+' =========================================================================
+' SUBROUTINE: UPDATE GROUP SUMMARY ON TODAYS_RENT_DATA
+' =========================================================================
+Public Sub UpdateGroupSummary()
+    Dim wsRent As Worksheet
+    Set wsRent = ThisWorkbook.Sheets("todays_rent_data")
+    
+    ' Extract Target Month/Year from O2 (Column 15)
+    Dim targetMonth As Integer, targetYear As Integer
+    Dim monthStr As String
+    monthStr = UCase(Trim(wsRent.Range("O2").Value))
+    
+    ' Parse Month
+    If InStr(monthStr, "_") > 0 Or InStr(monthStr, " ") > 0 Then
+        On Error Resume Next ' Avoid crash if string is weird
+        Dim parts() As String
+        If InStr(monthStr, "_") > 0 Then
+            parts = Split(monthStr, "_")
+        Else
+            parts = Split(monthStr, " ")
+        End If
+        targetMonth = Month(DateValue("1 " & parts(0) & " 2000")) ' Hack to get month number from name
+        targetYear = CInt(parts(1))
+        On Error GoTo 0
+    ElseIf monthStr <> "" Then
+        On Error Resume Next
+        targetMonth = Month(DateValue("1 " & monthStr & " 2000"))
+        targetYear = Year(Now) ' Default to current year
+        On Error GoTo 0
+    End If
+    
+    Dim grpNames() As String, grpTotals() As Double, grpPaids() As Double, grpDates() As Variant
+    Dim grpCount As Long: grpCount = 0
+    Dim indNames() As String, indPaids() As Double
+    Dim indCount As Long: indCount = 0
+    
+    Dim lastRow As Long
+    lastRow = wsRent.Cells(wsRent.Rows.Count, "E").End(xlUp).Row
+    
+    Dim i As Long, j As Long, grp As String, amt As Double, cellVal As Variant, idx As Long
+    
+    ' 1. Read Rent Totals
+    For i = 2 To lastRow
+        cellVal = wsRent.Cells(i, 5).Value
+        If Not IsError(cellVal) Then
+            grp = Trim(CStr(cellVal))
+            If grp <> "" And UCase(grp) <> "GRAND TOTAL" And UCase(Left(grp, 5)) <> "TOTAL" And UCase(Right(grp, 5)) <> "TOTAL" And grp <> "Error 2042" Then
+                amt = 0
+                If IsNumeric(wsRent.Cells(i, 3).Value) Then amt = CDbl(wsRent.Cells(i, 3).Value)
+                
+                idx = -1
+                If grpCount > 0 Then
+                    For j = 1 To grpCount
+                        If UCase(grpNames(j)) = UCase(grp) Then
+                            idx = j
+                            Exit For
+                        End If
+                    Next j
+                End If
+                
+                If idx = -1 Then
+                    grpCount = grpCount + 1
+                    ReDim Preserve grpNames(1 To grpCount)
+                    ReDim Preserve grpTotals(1 To grpCount)
+                    ReDim Preserve grpPaids(1 To grpCount)
+                    ReDim Preserve grpDates(1 To grpCount)
+                    
+                    grpNames(grpCount) = grp
+                    grpTotals(grpCount) = 0
+                    grpPaids(grpCount) = 0
+                    grpDates(grpCount) = ""
+                    idx = grpCount
+                End If
+                
+                grpTotals(idx) = grpTotals(idx) + amt
+            End If
+        End If
+    Next i
+    
+    ' 2. Read Payments from other sheets
+    Dim ws As Worksheet, ignoreSheets As String
+    ignoreSheets = "|RENT DATA|TODAYS_RENT_DATA|DATABASE_RENT_DATA|PAYMENT SHEET|EXPENDITURE|PURCHASE|DATABASE_PURCHASE|PURCHASE SHEET|SHEET17|TODAYS_EXPENDITURE|DATABASE_EXPENDITURE|"
+    
+    Dim r As Long, lastAliasRow As Long, pDate As Variant
+    
+    For Each ws In ThisWorkbook.Sheets
+        If InStr(1, ignoreSheets, "|" & UCase(ws.Name) & "|") = 0 Then
+            lastAliasRow = ws.Cells(ws.Rows.Count, "D").End(xlUp).Row
+            If lastAliasRow >= 2 Then
+                Dim defaultGrp As String: defaultGrp = ""
+                For i = 2 To lastRow
+                    Dim tmpName As String
+                    tmpName = UCase(Trim(CStr(wsRent.Cells(i, 1).Value)))
+                    Dim pLen As Long
+                    Do
+                        pLen = Len(tmpName)
+                        If Right(tmpName, 1) Like "#" Then tmpName = Left(tmpName, Len(tmpName) - 1)
+                        tmpName = Trim(tmpName)
+                    Loop Until Len(tmpName) = pLen Or Len(tmpName) = 0
+                    
+                    If tmpName = UCase(ws.Name) Then
+                        defaultGrp = UCase(Trim(CStr(wsRent.Cells(i, 5).Value)))
+                        Exit For
+                    End If
+                Next i
+                
+                Dim totalPaidForSheet As Double: totalPaidForSheet = 0
+                
+                For r = 2 To lastAliasRow
+                    cellVal = ws.Cells(r, 7).Value
+                    If IsError(cellVal) Then
+                        grp = defaultGrp
+                    Else
+                        grp = Trim(CStr(cellVal))
+                        If grp = "" Then grp = defaultGrp
+                    End If
+                    
+                    If grp <> "" And UCase(Right(grp, 5)) <> "TOTAL" Then
+                        pDate = ws.Cells(r, 1).Value
+                        Dim addPayment As Boolean: addPayment = False
+                        If targetMonth > 0 And targetYear > 0 Then
+                            Dim monthChecked As Boolean: monthChecked = False
+                            Dim forMonthStr As String
+                            If Not IsError(ws.Cells(r, 3).Value) Then
+                                forMonthStr = UCase(Trim(CStr(ws.Cells(r, 3).Value)))
+                                If forMonthStr <> "" Then
+                                    monthChecked = True
+                                    If InStr(forMonthStr, UCase(MonthName(targetMonth))) > 0 Then addPayment = True
+                                End If
+                            End If
+                            If Not monthChecked Then
+                                If IsDate(pDate) Then
+                                    If Month(pDate) = targetMonth And Year(pDate) = targetYear Then addPayment = True
+                                End If
+                            End If
+                        Else
+                            addPayment = True
+                        End If
+                        
+                        If addPayment Then
+                            amt = 0
+                            If IsNumeric(ws.Cells(r, 6).Value) Then amt = CDbl(ws.Cells(r, 6).Value)
+                            totalPaidForSheet = totalPaidForSheet + amt
+                            
+                            idx = -1
+                            If grpCount > 0 Then
+                                For j = 1 To grpCount
+                                    If UCase(grpNames(j)) = UCase(grp) Then
+                                        idx = j
+                                        Exit For
+                                    End If
+                                Next j
+                            End If
+                            
+                            If idx = -1 Then
+                                grpCount = grpCount + 1
+                                ReDim Preserve grpNames(1 To grpCount)
+                                ReDim Preserve grpTotals(1 To grpCount)
+                                ReDim Preserve grpPaids(1 To grpCount)
+                                ReDim Preserve grpDates(1 To grpCount)
+                                
+                                grpNames(grpCount) = grp
+                                grpTotals(grpCount) = 0
+                                grpPaids(grpCount) = 0
+                                grpDates(grpCount) = ""
+                                idx = grpCount
+                            End If
+                            
+                            grpPaids(idx) = grpPaids(idx) + amt
+                            
+                            If IsDate(pDate) And amt > 0 Then
+                                If grpDates(idx) = "" Then
+                                    grpDates(idx) = pDate
+                                ElseIf CDate(pDate) > CDate(grpDates(idx)) Then
+                                    grpDates(idx) = pDate
+                                End If
+                            End If
+                        End If
+                    End If
+                Next r
+                
+                If totalPaidForSheet > 0 Then
+                    indCount = indCount + 1
+                    ReDim Preserve indNames(1 To indCount)
+                    ReDim Preserve indPaids(1 To indCount)
+                    indNames(indCount) = UCase(ws.Name)
+                    indPaids(indCount) = totalPaidForSheet
+                End If
+            End If
+        End If
+    Next ws
+    
+    ' 3. Apply Individual Payments to Columns H and I
+    If lastRow >= 2 Then
+        wsRent.Range("H2:I" & lastRow).ClearContents
+        wsRent.Range("H2:I" & lastRow).Interior.ColorIndex = xlNone
+        wsRent.Range("H2:I" & lastRow).Font.Bold = False
+        wsRent.Range("H2:I" & lastRow).Font.ColorIndex = xlAutomatic
+        
+        For i = 2 To lastRow
+            cellVal = wsRent.Cells(i, 1).Value
+            If Not IsError(cellVal) Then
+                Dim rawName As String
+                rawName = Trim(CStr(cellVal))
+                
+                If rawName <> "" And UCase(rawName) <> "GRAND TOTAL" And UCase(Left(rawName, 5)) <> "TOTAL" And UCase(Right(rawName, 5)) <> "TOTAL" Then
+                    Dim baseName As String
+                    baseName = rawName
+                    Dim prevLen As Long
+                    Do
+                        prevLen = Len(baseName)
+                        If Right(baseName, 1) Like "#" Then baseName = Left(baseName, Len(baseName) - 1)
+                        baseName = Trim(baseName)
+                    Loop Until Len(baseName) = prevLen Or Len(baseName) = 0
+                    baseName = UCase(baseName)
+                    
+                    Dim rentAmt As Double: rentAmt = 0
+                    If IsNumeric(wsRent.Cells(i, 3).Value) Then rentAmt = CDbl(wsRent.Cells(i, 3).Value)
+                    
+                    Dim appliedPaid As Double: appliedPaid = 0
+                    
+                    If indCount > 0 Then
+                        For j = 1 To indCount
+                            If indNames(j) = baseName Then
+                                If indPaids(j) >= rentAmt Then
+                                    appliedPaid = rentAmt
+                                    indPaids(j) = indPaids(j) - rentAmt
+                                Else
+                                    appliedPaid = indPaids(j)
+                                    indPaids(j) = 0
+                                End If
+                                Exit For
+                            End If
+                        Next j
+                    End If
+                    
+                    wsRent.Cells(i, 8).Value = appliedPaid ' Col H (PAID)
+                    Dim dueAmt As Double: dueAmt = rentAmt - appliedPaid
+                    wsRent.Cells(i, 9).Value = dueAmt ' Col I (DUE)
+                End If
+            End If
+        Next i
+        
+        ' --- INDIVIDUAL CONDITIONAL FORMATTING (Columns H & I) ---
+        wsRent.Columns("H:I").FormatConditions.Delete
+        With wsRent.Range("H2:H" & lastRow).FormatConditions.Add(Type:=xlExpression, Formula1:="=$H2>=$C2")
+            .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
+        End With
+        With wsRent.Range("H2:H" & lastRow).FormatConditions.Add(Type:=xlExpression, Formula1:="=AND($H2>0, $H2<$C2)")
+            .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
+        End With
+        With wsRent.Range("I2:I" & lastRow).FormatConditions.Add(Type:=xlExpression, Formula1:="=$I2>0")
+            .Interior.Color = RGB(255, 199, 206): .Font.Color = RGB(156, 0, 6)
+        End With
+    End If
+    
+    ' 4. Output to Group Summary Table
+    wsRent.Range("J1:N1000").Clear
+    wsRent.Range("J1:N1").Value = Array("GROUP", "LAST PAID", "TOTAL AMOUNT", "TOTAL PAID", "GROUP DUE")
+    
+    With wsRent.Range("J1:N1")
+        .Interior.Color = RGB(41, 128, 185)
+        .Font.Color = RGB(255, 255, 255)
+        .Font.Bold = True
+        .HorizontalAlignment = -4108
+        .VerticalAlignment = -4108
+        .RowHeight = 25
+    End With
+    
+    Dim outRow As Long: outRow = 2
+    
+    If grpCount > 0 Then
+        For i = 1 To grpCount
+            wsRent.Cells(outRow, 10).Value = grpNames(i)
+            If IsDate(grpDates(i)) Then
+                wsRent.Cells(outRow, 11).Value = grpDates(i)
+                wsRent.Cells(outRow, 11).NumberFormat = "dd-mmm-yyyy"
+            Else
+                wsRent.Cells(outRow, 11).Value = "-"
+            End If
+            wsRent.Cells(outRow, 12).Value = grpTotals(i)
+            wsRent.Cells(outRow, 13).Value = grpPaids(i)
+            wsRent.Cells(outRow, 14).Value = grpTotals(i) - grpPaids(i)
+            If outRow Mod 2 = 0 Then
+                wsRent.Range(wsRent.Cells(outRow, 10), wsRent.Cells(outRow, 14)).Interior.Color = RGB(245, 245, 245)
+            End If
+            outRow = outRow + 1
+        Next i
+    End If
+    
+    If outRow > 2 Then
+        With wsRent.Range("J1:N" & outRow - 1).Borders
+            .LineStyle = 1
+            .Color = RGB(180, 180, 180)
+            .Weight = 2
+        End With
+        
+        ' --- NEW FIX: GROUP CONDITIONAL FORMATTING (Columns M & N) ---
+        wsRent.Columns("M:N").FormatConditions.Delete
+        ' GREEN (Fully Paid)
+        With wsRent.Range("M2:M" & (outRow - 1)).FormatConditions.Add(Type:=xlExpression, Formula1:="=$M2>=$L2")
+            .Interior.Color = RGB(198, 239, 206): .Font.Color = RGB(0, 97, 0)
+        End With
+        ' YELLOW (Partially Paid)
+        With wsRent.Range("M2:M" & (outRow - 1)).FormatConditions.Add(Type:=xlExpression, Formula1:="=AND($M2>0, $M2<$L2)")
+            .Interior.Color = RGB(255, 235, 156): .Font.Color = RGB(156, 101, 0)
+        End With
+        ' RED (Due)
+        With wsRent.Range("N2:N" & (outRow - 1)).FormatConditions.Add(Type:=xlExpression, Formula1:="=$N2>0")
+            .Interior.Color = RGB(255, 199, 206): .Font.Color = RGB(156, 0, 6)
+        End With
+    End If
+    
+    wsRent.Range("H2:I" & lastRow).NumberFormat = "#,##0"
+    wsRent.Range("L2:N" & outRow).NumberFormat = "#,##0"
+    wsRent.Columns("H:N").AutoFit
+End Sub
+
+' =========================================================================
+' SUBROUTINE: UPDATE EXPENDITURE SUMMARY
+' =========================================================================
+Public Sub UpdateExpenditureSummary()
+    Dim wsExp As Worksheet
+    On Error Resume Next
+    Set wsExp = ThisWorkbook.Sheets("todays_expenditure")
+    On Error GoTo 0
+    If wsExp Is Nothing Then Exit Sub
+    
+    Dim targetMonthStr As String
+    targetMonthStr = UCase(Trim(wsExp.Range("A2").Value))
+    If targetMonthStr = "" Then Exit Sub
+    
+    ' Parse Month
+    Dim targetMonth As Integer, targetYear As Integer
+    If InStr(targetMonthStr, "_") > 0 Or InStr(targetMonthStr, " ") > 0 Then
+        Dim parts() As String
+        If InStr(targetMonthStr, "_") > 0 Then
+            parts = Split(targetMonthStr, "_")
+        Else
+            parts = Split(targetMonthStr, " ")
+        End If
+        On Error Resume Next
+        targetMonth = Month(DateValue("1 " & parts(0) & " 2000"))
+        targetYear = CInt(parts(1))
+        On Error GoTo 0
+    ElseIf targetMonthStr <> "" Then
+        On Error Resume Next
+        targetMonth = Month(DateValue("1 " & targetMonthStr & " 2000"))
+        targetYear = Year(Now)
+        On Error GoTo 0
+    End If
+    If targetMonth = 0 Or targetYear = 0 Then Exit Sub
+    
+    ' 1. Calculate Total Rent Paid
+    Dim totalRentCollected As Double
+    totalRentCollected = 0
+    
+    Dim ignoreSheets As String
+    ignoreSheets = "|RENT DATA|TODAYS_RENT_DATA|DATABASE_RENT_DATA|PAYMENT SHEET|EXPENDITURE|PURCHASE|DATABASE_PURCHASE|PURCHASE SHEET|SHEET17|TODAYS_EXPENDITURE|DATABASE_EXPENDITURE|"
+    
+    Dim ws As Worksheet, r As Long, lastAliasRow As Long
+    Dim pDate As Variant, forMonthStr As String, monthChecked As Boolean, addPayment As Boolean, amt As Double
+    
+    For Each ws In ThisWorkbook.Sheets
+        If InStr(1, ignoreSheets, "|" & UCase(ws.Name) & "|") = 0 Then
+            lastAliasRow = ws.Cells(ws.Rows.Count, "D").End(xlUp).Row
+            If lastAliasRow >= 2 Then
+                For r = 2 To lastAliasRow
+                    pDate = ws.Cells(r, 1).Value
+                    addPayment = False
+                    monthChecked = False
+                    
+                    If Not IsError(ws.Cells(r, 3).Value) Then
+                        forMonthStr = UCase(Trim(CStr(ws.Cells(r, 3).Value)))
+                        If forMonthStr <> "" Then
+                            monthChecked = True
+                            If InStr(forMonthStr, UCase(MonthName(targetMonth))) > 0 Then addPayment = True
+                        End If
+                    End If
+                    
+                    If Not monthChecked Then
+                        If IsDate(pDate) Then
+                            If Month(CDate(pDate)) = targetMonth And Year(CDate(pDate)) = targetYear Then addPayment = True
+                        End If
+                    End If
+                    
+                    If addPayment Then
+                        amt = 0
+                        If IsNumeric(ws.Cells(r, 6).Value) Then amt = CDbl(ws.Cells(r, 6).Value)
+                        totalRentCollected = totalRentCollected + amt
+                    End If
+                Next r
+            End If
+        End If
+    Next ws
+    
+    ' --- NEW FEATURE: DYNAMICALLY HUNT TOTAL PURCHASES (WITH SMART 1-MONTH REVERT) ---
+    Dim totalPurchases As Double
+    totalPurchases = 0
+    Dim wsDBPurch As Worksheet
+    On Error Resume Next
+    Set wsDBPurch = ThisWorkbook.Sheets("DATABASE_PURCHASE")
+    On Error GoTo 0
+    
+    If Not wsDBPurch Is Nothing Then
+        ' Search by Col C (Item Name) because Date can be blank on grouped rows!
+        Dim lastPurchRow As Long
+        lastPurchRow = wsDBPurch.Cells(wsDBPurch.Rows.Count, "C").End(xlUp).Row
+        
+        ' Dynamically hunt for the Amount column in case it was moved
+        Dim amountCol As Long
+        amountCol = 8 ' Default to Col H based on your screenshot
+        Dim colIdx As Long
+        For colIdx = 1 To 20
+            If UCase(Trim(wsDBPurch.Cells(1, colIdx).Value)) = "AMOUNT" Or UCase(Trim(wsDBPurch.Cells(1, colIdx).Value)) = "TOTAL AMOUNT" Then
+                amountCol = colIdx
+                Exit For
+            End If
+        Next colIdx
+        
+        If lastPurchRow >= 2 Then
+            Dim currentMonth As Integer, currentYear As Integer
+            currentMonth = 0
+            currentYear = 0
+            
+            For r = 2 To lastPurchRow
+                pDate = wsDBPurch.Cells(r, 1).Value
+                If IsDate(pDate) Then
+                    ' SMART WORK: Shift the purchase date backward by exactly 1 month!
+                    ' (e.g. August purchases become July, Jan 2027 becomes Dec 2026)
+                    Dim accountingDate As Date
+                    accountingDate = DateAdd("m", -1, CDate(pDate))
+                    currentMonth = Month(accountingDate)
+                    currentYear = Year(accountingDate)
+                End If
+                
+                ' We use currentMonth because grouped rows have blank dates!
+                If currentMonth = targetMonth And currentYear = targetYear Then
+                    If IsNumeric(wsDBPurch.Cells(r, amountCol).Value) And wsDBPurch.Cells(r, amountCol).Value <> "" Then
+                        totalPurchases = totalPurchases + CDbl(wsDBPurch.Cells(r, amountCol).Value)
+                    End If
+                End If
+            Next r
+        End If
+    End If
+    
+    ' 2. SCORCHED EARTH POLICY: Find the "TOTAL" row and nuke everything below it!
+    Dim totalRow As Long
+    totalRow = 0
+    
+    For r = 1 To 1000
+        If UCase(Trim(wsExp.Cells(r, 1).Value)) = "TOTAL" Or UCase(Trim(wsExp.Cells(r, 1).Value)) = "GRAND TOTAL" Then
+            totalRow = r
+            Exit For
+        End If
+    Next r
+    
+    Dim lastExpRow As Long
+    If totalRow > 0 Then
+        wsExp.Rows((totalRow + 1) & ":1000").Clear
+        lastExpRow = totalRow - 1
+    Else
+        lastExpRow = wsExp.Cells(wsExp.Rows.Count, "B").End(xlUp).Row
+        wsExp.Rows((lastExpRow + 2) & ":1000").Clear
+    End If
+    
+    Dim totalPaid As Double, totalDue As Double
+    totalPaid = 0
+    totalDue = 0
+    
+    Dim c As Long, header As String, isPaid As Boolean, cellAmt As Double
+    For c = 2 To 100
+        header = UCase(Trim(wsExp.Cells(1, c).Value))
+        If header = "" Then header = UCase(Trim(wsExp.Cells(2, c).Value))
+        If header = "" Then header = UCase(Trim(wsExp.Cells(3, c).Value))
+        
+        If header = "AMOUNT" Or header = "SALARIES" Then
+            For r = 3 To lastExpRow
+                If IsNumeric(wsExp.Cells(r, c).Value) And wsExp.Cells(r, c).Value <> "" Then
+                    cellAmt = CDbl(wsExp.Cells(r, c).Value)
+                    isPaid = False
+                    
+                    If UCase(Trim(wsExp.Cells(r, c + 1).Value)) = "PAID" Or UCase(Trim(wsExp.Cells(r, c + 2).Value)) = "PAID" Or UCase(Trim(wsExp.Cells(r, c + 3).Value)) = "PAID" Then
+                        isPaid = True
+                    End If
+                    
+                    If isPaid Then
+                        totalPaid = totalPaid + cellAmt
+                    Else
+                        If cellAmt > 0 Then totalDue = totalDue + cellAmt
+                    End If
+                End If
+            Next r
+        End If
+    Next c
+    
+    Dim availBalance As Double
+    availBalance = totalRentCollected - totalPurchases - totalPaid
+    
+    ' 3. Draw Summary Table exactly 4 rows below the Total row
+    Dim summaryRow As Long
+    If totalRow > 0 Then
+        summaryRow = totalRow + 4
+    Else
+        summaryRow = lastExpRow + 4
+    End If
+    
+    wsExp.Cells(summaryRow, 1).Value = "TOTAL RENT COLLECTED"
+    wsExp.Cells(summaryRow, 2).Value = "TOTAL PURCHASES"
+    wsExp.Cells(summaryRow, 3).Value = "PAID AMOUNT"
+    wsExp.Cells(summaryRow, 4).Value = "DUE AMOUNT"
+    wsExp.Cells(summaryRow, 5).Value = "AVAILABLE BALANCE"
+    
+    With wsExp.Range(wsExp.Cells(summaryRow, 1), wsExp.Cells(summaryRow, 5))
+        .Interior.Color = RGB(41, 128, 185)
+        .Font.Color = RGB(255, 255, 255)
+        .Font.Bold = True
+        .HorizontalAlignment = -4108
+    End With
+    
+    wsExp.Cells(summaryRow + 1, 1).Value = totalRentCollected
+    wsExp.Cells(summaryRow + 1, 2).Value = totalPurchases
+    wsExp.Cells(summaryRow + 1, 3).Value = totalPaid
+    wsExp.Cells(summaryRow + 1, 4).Value = totalDue
+    wsExp.Cells(summaryRow + 1, 5).Value = availBalance
+    
+    With wsExp.Range(wsExp.Cells(summaryRow + 1, 1), wsExp.Cells(summaryRow + 1, 5))
+        .Font.Bold = True
+        .NumberFormat = "#,##0"
+        .HorizontalAlignment = -4108
+    End With
+    
+    If availBalance < totalDue Then
+        wsExp.Cells(summaryRow + 1, 5).Font.Color = RGB(192, 0, 0)
+    Else
+        wsExp.Cells(summaryRow + 1, 5).Font.Color = RGB(0, 128, 0)
+    End If
+    
+    wsExp.Columns("A:E").AutoFit
+End Sub

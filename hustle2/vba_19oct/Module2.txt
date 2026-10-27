@@ -1,0 +1,53 @@
+Public Sub LoadRentData()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("todays_rent_data")
+    
+    Dim newMonth As String
+    newMonth = InputBox("Enter the month to load (e.g., JULY_2026):", "Load Month")
+    If newMonth = "" Then Exit Sub
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    ' Update the Month Marker in P2 (was O2)
+    ws.Range("P2").Value = UCase(Trim(newMonth))
+    
+    ' Call the master macro to pull all payments and last payment dates from individual sheets!
+    ThisWorkbook.UpdateGroupSummary
+    
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    
+    MsgBox "Dashboard successfully updated for " & UCase(Trim(newMonth)) & "!", vbInformation, "Loaded"
+End Sub
+
+Sub ApplyRentConditionalFormatting()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("todays_rent_data")
+    
+    ' Clear existing rules
+    ws.Columns("I:J").FormatConditions.Delete
+    
+    ' RULE 1: FULLY PAID (Green Background)
+    ' Applies to Column I (PAID). Formula: Col I >= Col D
+    With ws.Range("I2:I1000").FormatConditions.Add(Type:=xlExpression, Formula1:="=$I2>=$D2")
+        .Interior.Color = RGB(198, 239, 206) ' Light Green Background
+        .Font.Color = RGB(0, 97, 0) ' Dark Green Text
+    End With
+    
+    ' RULE 2: PARTIALLY PAID (Yellow/Lighter Green Background)
+    ' Applies to Column I (PAID). Formula: Col I > 0 AND Col I < Col D
+    With ws.Range("I2:I1000").FormatConditions.Add(Type:=xlExpression, Formula1:="=AND($I2>0, $I2<$D2)")
+        .Interior.Color = RGB(255, 235, 156) ' Yellowish Background
+        .Font.Color = RGB(156, 101, 0) ' Dark Yellow/Brown Text
+    End With
+    
+    ' RULE 3: DUE AMOUNT (Red Background)
+    ' Applies to Column J (DUE). Formula: Col J > 0
+    With ws.Range("J2:J1000").FormatConditions.Add(Type:=xlExpression, Formula1:="=$J2>0")
+        .Interior.Color = RGB(255, 199, 206) ' Light Red Background
+        .Font.Color = RGB(156, 0, 6) ' Dark Red Text
+    End With
+    
+    MsgBox "Color coding applied successfully!", vbInformation, "Done"
+End Sub

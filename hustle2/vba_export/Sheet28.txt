@@ -1,0 +1,116 @@
+Private Sub Worksheet_Change(ByVal Target As Range)
+    On Error GoTo ErrorHandler
+    
+    Dim wsDB As Worksheet
+    Dim tblEntry As ListObject
+    Dim tblDB As ListObject
+    Dim dateCell As Range
+    
+    Set dateCell = Me.Range("C1")
+    
+    On Error Resume Next
+    Set tblEntry = Me.ListObjects("EntryFormTable")
+    Set wsDB = ThisWorkbook.Sheets("DATABASE_PURCHASE")
+    Set tblDB = wsDB.ListObjects("DailyPurchaseLedger")
+    On Error GoTo ErrorHandler
+    
+    ' ==========================================================
+    ' PART 1: IF THE DATE IS CHANGED -> LOAD DATA FROM DATABASE
+    ' ==========================================================
+    If Not Intersect(Target, dateCell) Is Nothing Then
+        Application.EnableEvents = False
+        Application.ScreenUpdating = False
+        
+        ' Clear the form completely
+        If tblEntry.DataBodyRange.Rows.Count > 0 Then
+            tblEntry.ListColumns("QTY (KG)").DataBodyRange.ClearContents
+            tblEntry.ListColumns("QTY (PCS)").DataBodyRange.ClearContents
+            tblEntry.ListColumns("RATE").DataBodyRange.ClearContents
+            tblEntry.ListColumns("TRSP").DataBodyRange.ClearContents
+            tblEntry.ListColumns("TOTAL AMOUNT").DataBodyRange.ClearContents
+        End If
+        
+        If IsDate(dateCell.Value) Then
+            Dim searchDate As Date
+            searchDate = CDate(dateCell.Value)
+            
+            Dim i As Long, j As Long
+            Dim dbItem As String
+            Dim entryItem As String
+            
+            If Not tblDB.DataBodyRange Is Nothing Then
+                For i = 1 To tblDB.DataBodyRange.Rows.Count
+                    If IsDate(tblDB.DataBodyRange.Cells(i, 1).Value) Then
+                        If CDate(tblDB.DataBodyRange.Cells(i, 1).Value) = searchDate Then
+                            dbItem = Trim(tblDB.DataBodyRange.Cells(i, 3).Value)
+                            
+                            For j = 1 To tblEntry.DataBodyRange.Rows.Count
+                                entryItem = Trim(tblEntry.DataBodyRange.Cells(j, 2).Value)
+                                If UCase(dbItem) = UCase(entryItem) Then
+                                    ' Load data from DB back into form
+                                    tblEntry.DataBodyRange.Cells(j, 3).Value = tblDB.DataBodyRange.Cells(i, 4).Value ' QTY KG
+                                    tblEntry.DataBodyRange.Cells(j, 4).Value = tblDB.DataBodyRange.Cells(i, 5).Value ' QTY PCS
+                                    tblEntry.DataBodyRange.Cells(j, 5).Value = tblDB.DataBodyRange.Cells(i, 6).Value ' RATE
+                                    tblEntry.DataBodyRange.Cells(j, 6).Value = tblDB.DataBodyRange.Cells(i, 7).Value ' TRSP
+                                    tblEntry.DataBodyRange.Cells(j, 7).Value = tblDB.DataBodyRange.Cells(i, 8).Value ' TOTAL
+                                    Exit For
+                                End If
+                            Next j
+                        End If
+                    End If
+                Next i
+            End If
+        End If
+        
+        Application.EnableEvents = True
+        Application.ScreenUpdating = True
+        Exit Sub
+    End If
+
+    ' ==========================================================
+    ' PART 2: IF YOU MANUALLY ENTER DATA -> AUTO-CALCULATE TOTAL
+    ' ==========================================================
+    If Not Intersect(Target, tblEntry.DataBodyRange) Is Nothing Then
+        ' Check if you edited QTY KG, QTY PCS, RATE, or TRSP
+        Dim cKG As Long, cPCS As Long, cRATE As Long, cTRSP As Long
+        cKG = tblEntry.ListColumns("QTY (KG)").Range.Column
+        cPCS = tblEntry.ListColumns("QTY (PCS)").Range.Column
+        cRATE = tblEntry.ListColumns("RATE").Range.Column
+        cTRSP = tblEntry.ListColumns("TRSP").Range.Column
+        
+        If Target.Column = cKG Or Target.Column = cPCS Or Target.Column = cRATE Or Target.Column = cTRSP Then
+            Application.EnableEvents = False
+            
+            Dim r As Range
+            For Each r In Target.Rows
+                Dim rowIdx As Long
+                rowIdx = r.Row - tblEntry.HeaderRowRange.Row
+                
+                If rowIdx > 0 And rowIdx <= tblEntry.DataBodyRange.Rows.Count Then
+                    Dim valKG As Double, valPCS As Double, valRATE As Double, valTRSP As Double
+                    ' Using Val() safely extracts numbers even if you type text like "9PC"
+                    valKG = Val(CStr(tblEntry.DataBodyRange.Cells(rowIdx, 3).Value & ""))
+                    valPCS = Val(CStr(tblEntry.DataBodyRange.Cells(rowIdx, 4).Value & ""))
+                    valRATE = Val(CStr(tblEntry.DataBodyRange.Cells(rowIdx, 5).Value & ""))
+                    valTRSP = Val(CStr(tblEntry.DataBodyRange.Cells(rowIdx, 6).Value & ""))
+                    
+                    Dim calcTotal As Double
+                    calcTotal = ((valKG + valPCS) * valRATE) + valTRSP
+                    
+                    If calcTotal > 0 Then
+                        tblEntry.DataBodyRange.Cells(rowIdx, 7).Value = calcTotal
+                    Else
+                        tblEntry.DataBodyRange.Cells(rowIdx, 7).ClearContents
+                    End If
+                End If
+            Next r
+            
+            Application.EnableEvents = True
+        End If
+    End If
+
+    Exit Sub
+ErrorHandler:
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+End Sub

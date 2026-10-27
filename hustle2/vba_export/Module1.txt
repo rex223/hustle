@@ -1,0 +1,155 @@
+Sub SaveExpenditureData()
+    Dim wsToday As Worksheet
+    Dim wsDB As Worksheet
+    Set wsToday = ThisWorkbook.Sheets("todays_expenditure")
+    Set wsDB = ThisWorkbook.Sheets("database_expenditure")
+    
+    Dim monthMarker As String
+    monthMarker = UCase(Trim(wsToday.Range("A2").Value))
+    
+    If Not monthMarker Like "*_20##" Then
+        MsgBox "Please enter a valid month marker (e.g., JULY_2026) in cell A2!", vbExclamation
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    
+    Dim lastRowToday As Long
+    lastRowToday = wsToday.Cells(wsToday.Rows.Count, "B").End(xlUp).Row
+    If lastRowToday < 2 Then lastRowToday = 2
+    
+    Dim i As Long
+    Dim foundStart As Long, foundEnd As Long
+    foundStart = 0
+    
+    Dim lastRowDB As Long
+    lastRowDB = wsDB.Cells(wsDB.Rows.Count, "B").End(xlUp).Row
+    If lastRowDB < 2 Then lastRowDB = 2
+    
+    ' 1. Find if this month already exists in the Database
+    For i = 2 To lastRowDB
+        If UCase(Trim(wsDB.Cells(i, 1).Value)) = monthMarker Then
+            foundStart = i
+            Exit For
+        End If
+    Next i
+    
+    ' 2. If it exists, delete the old block so we can replace it with the updated one
+    If foundStart > 0 Then
+        foundEnd = foundStart
+        For i = foundStart + 1 To lastRowDB
+            If UCase(Trim(wsDB.Cells(i, 1).Value)) Like "*_20##" Then
+                foundEnd = i - 1
+                Exit For
+            End If
+        Next i
+        If foundEnd = foundStart Then foundEnd = lastRowDB
+        
+        wsDB.Rows(foundStart & ":" & foundEnd).Delete
+    End If
+    
+    ' 3. Insert the new block exactly where the old one was (or at the bottom if new)
+    Dim insertRow As Long
+    If foundStart > 0 Then
+        insertRow = foundStart
+    Else
+        insertRow = wsDB.Cells(wsDB.Rows.Count, "B").End(xlUp).Row + 1
+        If insertRow < 2 Then insertRow = 2
+    End If
+    
+    wsToday.Rows("2:" & lastRowToday).Copy
+    wsDB.Rows(insertRow).Insert Shift:=xlDown
+    Application.CutCopyMode = False
+    
+    Application.ScreenUpdating = True
+    MsgBox monthMarker & " data saved successfully!", vbInformation, "Saved"
+End Sub
+
+Sub LoadExpenditureData()
+    Dim wsToday As Worksheet
+    Dim wsDB As Worksheet
+    Set wsToday = ThisWorkbook.Sheets("todays_expenditure")
+    Set wsDB = ThisWorkbook.Sheets("database_expenditure")
+    
+    Dim monthMarker As String
+    monthMarker = InputBox("Enter the month to load exactly as saved (e.g., JULY_2026):", "Load Data")
+    If monthMarker = "" Then Exit Sub
+    monthMarker = UCase(Trim(monthMarker))
+    
+    Application.ScreenUpdating = False
+    
+    Dim lastRowDB As Long
+    lastRowDB = wsDB.Cells(wsDB.Rows.Count, "B").End(xlUp).Row
+    
+    Dim i As Long
+    Dim foundStart As Long, foundEnd As Long
+    foundStart = 0
+    
+    For i = 2 To lastRowDB
+        If UCase(Trim(wsDB.Cells(i, 1).Value)) = monthMarker Then
+            foundStart = i
+            Exit For
+        End If
+    Next i
+    
+    If foundStart = 0 Then
+        MsgBox "Data for " & monthMarker & " was not found in the database.", vbExclamation
+        Application.ScreenUpdating = True
+        Exit Sub
+    End If
+    
+    foundEnd = foundStart
+    For i = foundStart + 1 To lastRowDB
+        If UCase(Trim(wsDB.Cells(i, 1).Value)) Like "*_20##" Then
+            foundEnd = i - 1
+            Exit For
+        End If
+    Next i
+    If foundEnd = foundStart Then foundEnd = lastRowDB
+    
+    ' Delete current data in todays_expenditure
+    Dim lastRowToday As Long
+    lastRowToday = wsToday.Cells(wsToday.Rows.Count, "B").End(xlUp).Row
+    If lastRowToday >= 2 Then wsToday.Rows("2:" & lastRowToday).Delete
+    
+    ' Copy data from DB
+    wsDB.Rows(foundStart & ":" & foundEnd).Copy
+    wsToday.Rows(2).Insert Shift:=xlDown
+    Application.CutCopyMode = False
+    
+    Application.ScreenUpdating = True
+    MsgBox monthMarker & " loaded successfully!", vbInformation, "Loaded"
+End Sub
+
+Sub StartNewMonth()
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("todays_expenditure")
+    
+    Dim newMonth As String
+    newMonth = InputBox("Enter the marker for the NEW month (e.g., AUGUST_2026):", "New Month")
+    If newMonth = "" Then Exit Sub
+    If Not UCase(Trim(newMonth)) Like "*_20##" Then
+        MsgBox "Marker must end with an underscore and year (e.g., _2026)", vbCritical
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    ws.Range("A2").Value = UCase(Trim(newMonth))
+    
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    
+    If lastRow > 2 Then
+        On Error Resume Next ' In case some ranges are already empty
+        ' Clear Dates (Col D, J, M, Q, T, X)
+        Intersect(ws.Rows("3:" & lastRow), ws.Range("D:D,J:J,M:M,Q:Q,T:T,X:X")).ClearContents
+        ' Clear Month Status (Col E)
+        Intersect(ws.Rows("3:" & lastRow), ws.Range("E:E")).ClearContents
+        ' Clear Amounts (Col G, I, L, O, R, U, W, Z, AC)
+        Intersect(ws.Rows("3:" & lastRow), ws.Range("G:G,I:I,L:L,O:O,R:R,U:U,W:W,Z:Z,AC:AC")).ClearContents
+        On Error GoTo 0
+    End If
+    
+    Application.ScreenUpdating = True
+    MsgBox "Sheet is cleared and ready for " & newMonth & "! The fixed salaries/details have been preserved.", vbInformation, "Ready"
+End Sub

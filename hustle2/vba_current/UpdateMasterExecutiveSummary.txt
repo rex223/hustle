@@ -1,0 +1,218 @@
+' =========================================================================
+' MASTER EXECUTIVE FINANCIAL SUMMARY REFRESH ENGINE
+' =========================================================================
+Public Sub UpdateMasterExecutiveSummary()
+    On Error GoTo ErrHandler
+    
+    Dim wsMaster As Worksheet
+    On Error Resume Next
+    Set wsMaster = ThisWorkbook.Sheets("MASTER_EXECUTIVE_SUMMARY")
+    On Error GoTo ErrHandler
+    
+    If wsMaster Is Nothing Then
+        MsgBox "MASTER_EXECUTIVE_SUMMARY sheet not found!", vbExclamation, "Executive Summary"
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.Calculation = xlCalculationManual
+    
+    Dim wsDB As Worksheet, wsPurch As Worksheet, wsDBRM As Worksheet, wsMisc As Worksheet
+    Set wsDB = ThisWorkbook.Sheets("database_expenditure")
+    
+    On Error Resume Next
+    Set wsPurch = ThisWorkbook.Sheets("DATABASE_PURCHASE")
+    Set wsDBRM = ThisWorkbook.Sheets("DATABASE_RENT_MISC")
+    Set wsMisc = ThisWorkbook.Sheets("MISCELLANEOUS")
+    On Error GoTo ErrHandler
+    
+    ' -------------------------------------------------------------------------
+    ' 1. COLLECT RENT DATA FOR ALL MONTHS ACROSS TENANT SHEETS
+    ' -------------------------------------------------------------------------
+    Dim rentByMonth(1 To 12) As Double
+    Dim purchByMonth(1 To 12) As Double
+    Dim miscByMonth(1 To 12) As Double
+    Dim m As Long
+    For m = 1 To 12
+        rentByMonth(m) = 0
+        purchByMonth(m) = 0
+        miscByMonth(m) = 0
+    Next m
+    
+    Dim ws As Worksheet, lastR As Long, r As Long, pDate As Variant
+    Dim forMonthStr As String, amt As Double, targetM As Long
+    
+    For Each ws In ThisWorkbook.Worksheets
+        Select Case UCase(Trim(ws.Name))
+            Case "TODAYS_RENT_DATA", "TODAYS_EXPENDITURE", "DATABASE_EXPENDITURE", _
+                 "PURCHASE SHEET", "DATABASE_PURCHASE", "MISCELLANEOUS", _
+                 "RENT PERSONS MISCELLANEOUS", "TODAYS_RENT_MISC", "DATABASE_RENT_MISC", _
+                 "MASTER_EXECUTIVE_SUMMARY"
+                ' Skip non-tenant sheets
+            Case Else
+                lastR = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+                If lastR >= 2 Then
+                    For r = 2 To lastR
+                        forMonthStr = ""
+                        If Not IsError(ws.Cells(r, 3).Value) Then
+                            forMonthStr = UCase(Trim(CStr(ws.Cells(r, 3).Value)))
+                        End If
+                        pDate = ws.Cells(r, 1).Value
+                        
+                        targetM = 0
+                        If InStr(forMonthStr, "JUL") > 0 Then targetM = 7
+                        If InStr(forMonthStr, "AUG") > 0 Then targetM = 8
+                        If InStr(forMonthStr, "SEP") > 0 Then targetM = 9
+                        If InStr(forMonthStr, "OCT") > 0 Then targetM = 10
+                        If InStr(forMonthStr, "NOV") > 0 Then targetM = 11
+                        If InStr(forMonthStr, "DEC") > 0 Then targetM = 12
+                        If InStr(forMonthStr, "JAN") > 0 Then targetM = 1
+                        If InStr(forMonthStr, "FEB") > 0 Then targetM = 2
+                        If InStr(forMonthStr, "MAR") > 0 Then targetM = 3
+                        If InStr(forMonthStr, "APR") > 0 Then targetM = 4
+                        If InStr(forMonthStr, "MAY") > 0 Then targetM = 5
+                        If InStr(forMonthStr, "JUN") > 0 Then targetM = 6
+                        
+                        If targetM = 0 And IsDate(pDate) Then
+                            targetM = Month(CDate(pDate))
+                        End If
+                        
+                        If targetM >= 1 And targetM <= 12 Then
+                            If IsNumeric(ws.Cells(r, 6).Value) Then
+                                rentByMonth(targetM) = rentByMonth(targetM) + CDbl(ws.Cells(r, 6).Value)
+                            End If
+                        End If
+                    Next r
+                End If
+        End Select
+    Next ws
+    
+    ' Rent Persons Misc Incoming (DATABASE_RENT_MISC - shifted -1 month)
+    If Not wsDBRM Is Nothing Then
+        lastR = wsDBRM.Cells(wsDBRM.Rows.Count, "A").End(xlUp).Row
+        For r = 3 To lastR
+            If UCase(Trim(wsDBRM.Cells(r, 5).Value)) = "RECEIVED" Then
+                If IsDate(wsDBRM.Cells(r, 1).Value) Then
+                    targetM = Month(DateAdd("m", -1, CDate(wsDBRM.Cells(r, 1).Value)))
+                    If targetM >= 1 And targetM <= 12 Then
+                        If IsNumeric(wsDBRM.Cells(r, 4).Value) Then
+                            rentByMonth(targetM) = rentByMonth(targetM) + CDbl(wsDBRM.Cells(r, 4).Value)
+                        End If
+                    End If
+                End If
+            End If
+        Next r
+    End If
+    
+    ' -------------------------------------------------------------------------
+    ' 2. COLLECT PURCHASES BY MONTH (DATABASE_PURCHASE)
+    ' -------------------------------------------------------------------------
+    If Not wsPurch Is Nothing Then
+        Dim amtCol As Long: amtCol = 8
+        Dim cIdx As Long
+        For cIdx = 1 To 20
+            If UCase(Trim(wsPurch.Cells(1, cIdx).Value)) = "AMOUNT" Or UCase(Trim(wsPurch.Cells(1, cIdx).Value)) = "TOTAL AMOUNT" Then
+                amtCol = cIdx
+                Exit For
+            End If
+        Next cIdx
+        
+        lastR = wsPurch.Cells(wsPurch.Rows.Count, "C").End(xlUp).Row
+        For r = 2 To lastR
+            If IsDate(wsPurch.Cells(r, 1).Value) Then
+                Dim acctDate As Date
+                acctDate = DateAdd("m", -1, CDate(wsPurch.Cells(r, 1).Value))
+                targetM = Month(acctDate)
+                If targetM >= 1 And targetM <= 12 Then
+                    If IsNumeric(wsPurch.Cells(r, amtCol).Value) Then
+                        purchByMonth(targetM) = purchByMonth(targetM) + CDbl(wsPurch.Cells(r, amtCol).Value)
+                    End If
+                End If
+            End If
+        Next r
+    End If
+    
+    ' -------------------------------------------------------------------------
+    ' 3. COLLECT OUTGOING MISC BY MONTH (Shifted -1 month)
+    ' -------------------------------------------------------------------------
+    ' A. DATABASE_RENT_MISC Outgoing (Date in Col 7, Amount in Col 10)
+    If Not wsDBRM Is Nothing Then
+        lastR = wsDBRM.Cells(wsDBRM.Rows.Count, "G").End(xlUp).Row
+        For r = 3 To lastR
+            If IsDate(wsDBRM.Cells(r, 7).Value) Then
+                targetM = Month(DateAdd("m", -1, CDate(wsDBRM.Cells(r, 7).Value)))
+                If targetM >= 1 And targetM <= 12 Then
+                    If IsNumeric(wsDBRM.Cells(r, 10).Value) Then
+                        miscByMonth(targetM) = miscByMonth(targetM) + CDbl(wsDBRM.Cells(r, 10).Value)
+                    End If
+                End If
+            End If
+        Next r
+    End If
+    
+    ' B. MISCELLANEOUS Sheet Outgoing (Date in Col 1 [A], Amount in Col 4 [D] - shifted -1 month)
+    If Not wsMisc Is Nothing Then
+        lastR = wsMisc.Cells(wsMisc.Rows.Count, "A").End(xlUp).Row
+        For r = 2 To lastR
+            If IsDate(wsMisc.Cells(r, 1).Value) Then
+                targetM = Month(DateAdd("m", -1, CDate(wsMisc.Cells(r, 1).Value)))
+                If targetM >= 1 And targetM <= 12 Then
+                    If IsNumeric(wsMisc.Cells(r, 4).Value) Then
+                        miscByMonth(targetM) = miscByMonth(targetM) + CDbl(wsMisc.Cells(r, 4).Value)
+                    End If
+                End If
+            End If
+        Next r
+    End If
+    
+    ' -------------------------------------------------------------------------
+    ' 4. POPULATE MONTH ROWS IN MASTER EXECUTIVE SUMMARY (Rows 12 to 23)
+    ' -------------------------------------------------------------------------
+    Dim monthMap(12 To 23) As Long
+    monthMap(12) = 7:  monthMap(13) = 8:  monthMap(14) = 9
+    monthMap(15) = 10: monthMap(16) = 11: monthMap(17) = 12
+    monthMap(18) = 1:  monthMap(19) = 2:  monthMap(20) = 3
+    monthMap(21) = 4:  monthMap(22) = 5:  monthMap(23) = 6
+    
+    Dim rowIdx As Long, curM As Long
+    For rowIdx = 12 To 23
+        curM = monthMap(rowIdx)
+        
+        wsMaster.Cells(rowIdx, 2).Value = rentByMonth(curM)
+        wsMaster.Cells(rowIdx, 3).Value = purchByMonth(curM)
+        wsMaster.Cells(rowIdx, 5).Value = miscByMonth(curM)
+        
+        wsMaster.Cells(rowIdx, 6).Formula = "=C" & rowIdx & "+D" & rowIdx & "+E" & rowIdx
+        wsMaster.Cells(rowIdx, 7).Formula = "=B" & rowIdx & "-F" & rowIdx
+        wsMaster.Cells(rowIdx, 8).Formula = "=IF(B" & rowIdx & ">0, G" & rowIdx & "/B" & rowIdx & ", 0)"
+    Next rowIdx
+    
+    ' Summary Cards
+    wsMaster.Range("B5").Formula = "=SUM(B12:B23)"
+    wsMaster.Range("C5").Formula = "=SUM(F12:F23)"
+    wsMaster.Range("E5").Formula = "=B5-C5"
+    wsMaster.Range("F5").Formula = "=IF(B5>0, E5/B5, 0)"
+    
+    ' Total row 24
+    wsMaster.Cells(24, 2).Formula = "=SUM(B12:B23)"
+    wsMaster.Cells(24, 3).Formula = "=SUM(C12:C23)"
+    wsMaster.Cells(24, 4).Formula = "=SUM(D12:D23)"
+    wsMaster.Cells(24, 5).Formula = "=SUM(E12:E23)"
+    wsMaster.Cells(24, 6).Formula = "=SUM(F12:F23)"
+    wsMaster.Cells(24, 7).Formula = "=SUM(G12:G23)"
+    wsMaster.Cells(24, 8).Formula = "=IF(B24>0, G24/B24, 0)"
+    
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    
+    MsgBox "Executive Master Summary successfully refreshed for all months!", vbInformation, "Refresh Complete"
+    Exit Sub
+    
+ErrHandler:
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    MsgBox "Error updating Master Executive Summary: " & Err.Description, vbCritical, "Error"
+End Sub
